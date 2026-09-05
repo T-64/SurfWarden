@@ -1,6 +1,6 @@
 {
   "name": "surfwarden",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "本地优先的网页时间统计与监督插件：分用途记录，而不是域名一刀切。",
   "private": true,
   "type": "module",
@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage --coverage.include='src/core/**' --coverage.include='src/shared/**'",
-    "smoke": "node e2e/smoke.mjs"
+    "smoke": "node e2e/smoke.mjs",
+    "e2e:block": "node e2e/blocking.mjs"
   },
   "dependencies": {
     "dexie": "^4.4.5",
