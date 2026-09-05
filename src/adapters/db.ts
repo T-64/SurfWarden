@@ -54,6 +54,22 @@ export async function usageForDate(date: string): Promise<UsageRow[]> {
   return db.usageDaily.where('date').equals(date).toArray();
 }
 
+/** 当日豁免次数（无行 = 0） */
+export async function exemptCountForDate(date: string): Promise<number> {
+  const row = await db.exempts.get(date);
+  return row?.count ?? 0;
+}
+
+/** 记一次豁免，返回新计数 */
+export async function addExempt(date: string): Promise<number> {
+  return db.transaction('rw', db.exempts, async () => {
+    const row = await db.exempts.get(date);
+    const count = (row?.count ?? 0) + 1;
+    await db.exempts.put({ date, count });
+    return count;
+  });
+}
+
 export function todayKey(cutoffHour: number): string {
   return dateKey(Date.now(), cutoffHour);
 }
