@@ -135,3 +135,26 @@ export interface StepResult {
   state: TrackerState;
   closed: ClosedSegment[];
 }
+
+// ===== 数据类（IndexedDB，docs/design/data-model.md §2） =====
+
+/** sessions 表一行 */
+export interface SessionRow extends ClosedSegment {
+  /** 自增主键 */
+  id?: number;
+}
+
+/** usage_daily 表一行，复合主键 [date+categoryId+host] */
+export interface UsageRow {
+  date: string;
+  categoryId: CategoryId;
+  host: string;
+  seconds: number;
+  visits: number;
+}
+
+/** exempts 表一行，主键 date */
+export interface ExemptRow {
+  date: string;
+  count: number;
+}

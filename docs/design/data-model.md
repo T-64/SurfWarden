@@ -60,9 +60,8 @@ interface SessionRow {
   endReason: 'event' | 'idle' | 'blur' | 'cap'   // cap = 心跳宽限截断
 }
 
-/** 按日聚合。usage_daily 表，复合主键保证 upsert 幂等 */
+/** 按日聚合。usage_daily 表，复合主键 [date+categoryId+host] 保证 upsert 幂等 */
 interface UsageRow {
-  key: [string, CategoryId, string]   // [date, categoryId, host]
   date: string
   categoryId: CategoryId
   host: string
