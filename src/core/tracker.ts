@@ -24,7 +24,13 @@ import type {
 const HB_JITTER_MS = 15_000;
 
 export function initialState(): TrackerState {
-  return { focusedWindowId: null, activeTabs: {}, current: null, lastActiveAt: 0 };
+  return {
+    focusedWindowId: null,
+    activeTabs: {},
+    current: null,
+    lastActiveAt: 0,
+    idleState: 'active', // 乐观初值，sync 事件会用真实 idle 状态纠正
+  };
 }
 
 function hostOf(url: string): string | null {
@@ -43,6 +49,7 @@ function cloneState(s: TrackerState): TrackerState {
     ),
     current: s.current ? { ...s.current } : null,
     lastActiveAt: s.lastActiveAt,
+    idleState: s.idleState,
   };
 }
 
@@ -119,12 +126,14 @@ export function step(prev: TrackerState, ev: TrackerEvent, deps: TrackerDeps): S
       break;
     }
     case 'tab-updated': {
-      const t = s.activeTabs[ev.windowId];
-      if (t && t.tabId === ev.tabId) {
-        t.url = ev.url;
-        t.title = ev.title;
-        t.incognito = ev.incognito;
-      }
+      // 无条件 upsert：SW 早启动窗口期可能丢过 onActivated，
+      // 该事件携带的就是此窗口 active tab 的最新信息（adapter 已过滤非 active tab）
+      s.activeTabs[ev.windowId] = {
+        tabId: ev.tabId,
+        url: ev.url,
+        title: ev.title,
+        incognito: ev.incognito,
+      };
       if (ev.windowId === s.focusedWindowId) touch(s, ev.at);
       break;
     }
@@ -141,6 +150,7 @@ export function step(prev: TrackerState, ev: TrackerEvent, deps: TrackerDeps): S
       break;
     }
     case 'idle-changed': {
+      s.idleState = ev.state;
       if (ev.state === 'active') touch(s, ev.at);
       break;
     }
@@ -152,6 +162,7 @@ export function step(prev: TrackerState, ev: TrackerEvent, deps: TrackerDeps): S
     case 'sync': {
       s.focusedWindowId = ev.focusedWindowId;
       s.activeTabs = {};
+      s.idleState = ev.idleState;
       for (const t of ev.tabs) {
         s.activeTabs[t.windowId] = {
           tabId: t.tabId,
@@ -189,16 +200,23 @@ export function step(prev: TrackerState, ev: TrackerEvent, deps: TrackerDeps): S
   }
   if (closeReason && cur) closed.push(...closeSegment(s, ev.at, closeReason, deps));
 
-  // 3. 判定是否开新段
-  if (!s.current) {
+  // 3. 判定是否开新段（前提：系统处于 active——idle 中不因记账事件开段）
+  if (!s.current && s.idleState === 'active') {
     let open = false;
     if (ev.type === 'tab-activated' || ev.type === 'sync') open = true;
     else if (ev.type === 'window-focus' && ev.windowId !== -1) open = true;
     else if (ev.type === 'idle-changed' && ev.state === 'active') open = true;
-    else if (closed.length > 0 && (ev.type === 'tab-updated' || ev.type === 'heartbeat'))
-      open = true; // URL 变化换段 / 心跳 cap 后重开
+    else if (ev.type === 'tab-updated' && isFocusedActiveTab(s, ev.windowId, ev.tabId)) open = true;
+    else if (closed.length > 0 && ev.type === 'heartbeat') open = true; // 心跳 cap 后重开
     if (open) tryOpen(s, ev.at, deps);
   }
 
   return { state: s, closed };
+}
+
+/** 该事件是否命中"聚焦窗口的当前 active tab"（E2E 发现的缺口：新 tab 加载完成也要开段） */
+function isFocusedActiveTab(s: TrackerState, windowId: number, tabId: number): boolean {
+  return (
+    windowId === s.focusedWindowId && s.activeTabs[windowId]?.tabId === tabId
+  );
 }

@@ -34,6 +34,7 @@ export function wireEvents(emit: (ev: TrackerEvent) => void): void {
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (!changeInfo.url && !changeInfo.title) return;
     if (tab.windowId == null || tab.url == null) return;
+    if (!tab.active) return; // v0.1 只追踪各窗口 active tab，后台 tab 的标题变化不产生事件
     emit({
       type: 'tab-updated',
       windowId: tab.windowId,

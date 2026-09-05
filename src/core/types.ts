@@ -122,6 +122,8 @@ export interface TrackerState {
   current: ActiveSegment | null;
   /** 活动水位：最后一次有正证据的用户活动时刻 */
   lastActiveAt: number;
+  /** 最后已知的系统 idle 状态（开段前置条件） */
+  idleState: IdleState;
 }
 
 export interface TrackerDeps {

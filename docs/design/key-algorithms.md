@@ -52,6 +52,11 @@ type TrackerEvent =
 | E10 | 空段 | 开段同刻关段 | end<=start，丢弃不写库 |
 | E11 | 心跳但无段 | heartbeat 且 current=null | 水位不动，无段产生 |
 | E12 | 跨 dayCutoff | 段 23:58→00:03（cutoff=0） | 拆两段，date 各归其日 |
+| E13 | 跨窗口切换 | activated(A,w1)→activated(B,w2) | A 段以 blur 关闭，B 开段 |
+| E17 | 新 tab 加载完成 | activated(about:blank)→updated(url) | tab-updated 开段（ADR-0006 修订 1）|
+| E18 | 后台 tab 更新 | updated(非聚焦窗口 tab) | 不开段 |
+| E19 | idle 中自动刷新 | idle→updated(聚焦 active tab) | 不开段（idleState 门禁）|
+| E20 | 记账自愈 | window-focus→updated(未见过的 tab) | upsert 记账 + 开段 |
 
 E12 说明：关段时若 `start` 与 `end` 落在不同 dateKey，**按天拆分**（同一 URL 两个 SessionRow），保证不变量 3 成立。
 

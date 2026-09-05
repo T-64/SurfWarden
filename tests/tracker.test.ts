@@ -164,6 +164,7 @@ describe('计时状态机（key-algorithms §1.3 边界表）', () => {
         startedAt: T0,
       },
       lastActiveAt: T0 + 30_000,
+      idleState: 'active',
     };
     const { state, closed } = run([{ type: 'startup', at: T0 + 600_000 }], mkDeps(), dirty);
     expect(closed).toHaveLength(1);
@@ -232,6 +233,46 @@ describe('计时状态机（key-algorithms §1.3 边界表）', () => {
   it('E16 隐身标签页照常计时并带 incognito 标记（PRODUCT.md §3.7）', () => {
     const { state } = run([act(1, 100, TW, T0, true)]);
     expect(state.current).toMatchObject({ incognito: true, categoryId: 'entertainment' });
+  });
+
+  it('E17 新 tab 加载完成（tab-updated）：聚焦窗口的 active tab 要开段（E2E 冒烟发现的缺口）', () => {
+    // 新建 tab 激活瞬间是 about:blank（不可追踪），导航完成后靠 tab-updated 开段
+    const { state, closed } = run([
+      act(1, 100, 'about:blank', T0),
+      upd(1, 100, GH, T0 + 20_000),
+      hb(T0 + 50_000),
+      upd(1, 100, 'https://www.iana.org/', T0 + 80_000),
+    ]);
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({ url: GH, start: T0 + 20_000, end: T0 + 80_000 });
+    expect(state.current).toMatchObject({ url: 'https://www.iana.org/', startedAt: T0 + 80_000 });
+  });
+
+  it('E18 后台 tab 的 tab-updated 不开段', () => {
+    const { state } = run([
+      act(1, 100, GH, T0),
+      { type: 'tab-updated', windowId: 200, tabId: 2, url: TW, incognito: false, at: T0 + 10_000 },
+    ]);
+    expect(state.current).toMatchObject({ windowId: 100, tabId: 1 });
+  });
+
+  it('E19 idle 状态下后台自动刷新不误开段（idleState 门禁）', () => {
+    const { state } = run([
+      act(1, 100, GH, T0),
+      { type: 'idle-changed', state: 'idle', at: T0 + 60_000 },
+      { type: 'tab-updated', windowId: 100, tabId: 1, url: TW, incognito: false, at: T0 + 120_000 },
+    ]);
+    expect(state.current).toBeNull();
+    expect(state.idleState).toBe('idle');
+  });
+
+  it('E20 tab-updated 为未见过的 tab 补建记账（SW 早启动丢事件后的自愈）', () => {
+    const { state } = run([
+      { type: 'window-focus', windowId: 300, at: T0 },
+      { type: 'tab-updated', windowId: 300, tabId: 9, url: TW, incognito: false, at: T0 + 10_000 },
+    ]);
+    expect(state.activeTabs[300]).toMatchObject({ tabId: 9, url: TW });
+    expect(state.current).toMatchObject({ windowId: 300, tabId: 9, startedAt: T0 + 10_000 });
   });
 
   it('状态不可变：step 不修改传入的 prev', () => {

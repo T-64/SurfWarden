@@ -138,3 +138,26 @@ export function matchUrl(compiled: CompiledRule[], href: string): ClassifyResult
   }
   return null;
 }
+
+/**
+ * 组合语义（key-algorithms §2.2）：规则无命中时，http(s) 落默认类别，
+ * 其余协议（chrome://、chrome-extension://、file: 等）不可追踪返回 null。
+ * 这是 background deps.classify 的唯一正确实现，避免两类 null 混淆。
+ */
+export function matchUrlOrDefault(
+  compiled: CompiledRule[],
+  href: string,
+  defaultCategoryId: string,
+): ClassifyResult | null {
+  const hit = matchUrl(compiled, href);
+  if (hit) return hit;
+  try {
+    const u = new URL(href);
+    if (u.protocol === 'http:' || u.protocol === 'https:') {
+      return { categoryId: defaultCategoryId };
+    }
+  } catch {
+    // 不可解析的 URL 不可追踪
+  }
+  return null;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compileRules, matchUrl, parsePattern } from '../src/core/urlMatch';
+import { compileRules, matchUrl, matchUrlOrDefault, parsePattern } from '../src/core/urlMatch';
 import type { Rule } from '../src/core/types';
 
 let seq = 0;
@@ -106,6 +106,27 @@ describe('优先级：specificity 降序，同分按创建先后（ADR 设计 §
     ]);
     expect(matchUrl(c, 'https://twitter.com/')).toBeNull();
     expect(matchUrl(c, 'https://github.com/')?.categoryId).toBe('work');
+  });
+});
+
+describe('matchUrlOrDefault：background classify 的唯一正确语义', () => {
+  const compiled = compileRules([rule('twitter.com', 'entertainment')]);
+  const classify = (url: string) => matchUrlOrDefault(compiled, url, 'neutral');
+
+  it('命中规则 → 规则类别', () => {
+    expect(classify('https://twitter.com/x')?.categoryId).toBe('entertainment');
+  });
+
+  it('无命中 + http(s) → 默认类别（E2E 冒烟发现的缺口：否则未知站点永不计时）', () => {
+    expect(classify('https://example.com/')?.categoryId).toBe('neutral');
+    expect(classify('https://example.com/')?.ruleId).toBeUndefined();
+  });
+
+  it('非 http(s) → null（不可追踪，不能落默认类别）', () => {
+    expect(classify('chrome://newtab')).toBeNull();
+    expect(classify('chrome-extension://abc/popup.html')).toBeNull();
+    expect(classify('about:blank')).toBeNull();
+    expect(classify('')).toBeNull();
   });
 });
 
