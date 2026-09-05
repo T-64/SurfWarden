@@ -1,7 +1,7 @@
 # 实施方案（Implementation Plan）
 
 > 三个版本逐个交付，每个版本满足 dev-process.md §3 的 DoD 才打 tag。版本内任务分解即提交计划。
-> 进度（2026-09-06）：✅ v0.1.0（wildcard/regex 提前在 T4 完成，U1 随之完结）｜✅ v0.2.0（U1–U9，E2E 全闭环 PASS）｜⬜ v0.3.0
+> 进度（2026-09-06）：✅ v0.1.0（wildcard/regex 提前在 T4 完成，U1 随之完结）｜✅ v0.2.0（U1–U9，E2E 全闭环 PASS）｜✅ v0.3.0（W1–W5，MVP 完成）
 
 ## v0.1.0 —— 装上自用：知道"我今天都干嘛了"（对应 PRODUCT.md M0+M1）
 

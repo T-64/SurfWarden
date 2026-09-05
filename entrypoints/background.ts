@@ -3,6 +3,7 @@ import { configStore } from '../src/adapters/configStore';
 import {
   addExempt,
   exemptCountForDate,
+  purgeSessionsOlderThan,
   recordSegments,
   todayKey,
   usageForDate,
@@ -246,6 +247,7 @@ export default defineBackground(() => {
     }
     if (a.name === DAYCUT_ALARM) {
       void (async () => {
+        await purgeSessionsOlderThan(90); // 明细 90 天保留策略（data-model §2）
         await budgetCheckpoint();
         scheduleDaycut((await configStore.getSettings()).dayCutoffHour);
       })();
@@ -266,6 +268,15 @@ export default defineBackground(() => {
 
   void (async () => {
     await configStore.ensureDefaults();
+
+    // 隐身授权检测（ADR-0009）：未授权时用图标 title 提示，不做对抗
+    chrome.extension.isAllowedIncognitoAccess((allowed) => {
+      if (!allowed) {
+        void chrome.action.setTitle({
+          title: 'SurfWarden ⚠️ 未开启隐身窗口统计——右键扩展图标 → 管理扩展 → 允许隐身模式',
+        });
+      }
+    });
 
     const stored = await chrome.storage.session.get(SNAPSHOT_KEY);
     const snap = stored[SNAPSHOT_KEY] as TrackerState | undefined;

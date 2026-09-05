@@ -33,3 +33,52 @@ export const DEFAULT_RULES: Rule[] = [
   { id: 'seed-leetcode', name: 'LeetCode', pattern: 'leetcode.cn', category: 'learning', enabled: true, createdAt: 9 },
   { id: 'seed-github', name: 'GitHub', pattern: 'github.com', category: 'work', enabled: true, createdAt: 10 },
 ];
+
+/** 模板包（v0.3 options 一键导入；按 pattern 去重后追加） */
+export const TEMPLATE_PACKS: Array<{
+  id: string;
+  name: string;
+  items: Array<{ name: string; pattern: string; category: string }>;
+}> = [
+  {
+    id: 'social',
+    name: '社交',
+    items: [
+      { name: 'Twitter / X', pattern: 'x.com', category: 'entertainment' },
+      { name: 'Twitter 移动域', pattern: 'twitter.com', category: 'entertainment' },
+      { name: 'Instagram', pattern: 'instagram.com', category: 'entertainment' },
+      { name: '微博', pattern: 'weibo.com', category: 'entertainment' },
+      { name: '小红书', pattern: 'xiaohongshu.com', category: 'entertainment' },
+      { name: 'Reddit', pattern: 'reddit.com', category: 'entertainment' },
+    ],
+  },
+  {
+    id: 'video',
+    name: '视频',
+    items: [
+      { name: 'B站', pattern: 'bilibili.com', category: 'entertainment' },
+      { name: 'B站视频（便于改判/白名单）', pattern: 'bilibili.com/video/*', category: 'entertainment' },
+      { name: 'YouTube', pattern: 'youtube.com', category: 'entertainment' },
+      { name: '抖音', pattern: 'douyin.com', category: 'entertainment' },
+    ],
+  },
+  {
+    id: 'live',
+    name: '直播',
+    items: [
+      { name: 'B站直播', pattern: 'live.bilibili.com', category: 'entertainment' },
+      { name: 'Twitch', pattern: 'twitch.tv', category: 'entertainment' },
+      { name: '斗鱼', pattern: 'douyu.com', category: 'entertainment' },
+    ],
+  },
+  {
+    id: 'learn',
+    name: '学习',
+    items: [
+      { name: 'Coursera', pattern: 'coursera.org', category: 'learning' },
+      { name: 'LeetCode', pattern: 'leetcode.cn', category: 'learning' },
+      { name: 'MDN', pattern: 'developer.mozilla.org', category: 'learning' },
+      { name: 'B站教育分区视频', pattern: 'bilibili.com/video/*', category: 'learning' },
+    ],
+  },
+];

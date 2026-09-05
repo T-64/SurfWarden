@@ -70,6 +70,12 @@ export async function addExempt(date: string): Promise<number> {
   });
 }
 
+/** 明细保留策略：清理 N 天前的 sessions（聚合保留），返回删除行数 */
+export async function purgeSessionsOlderThan(days: number): Promise<number> {
+  const cutoff = Date.now() - days * 86_400_000;
+  return db.sessions.where('start').below(cutoff).delete();
+}
+
 export function todayKey(cutoffHour: number): string {
   return dateKey(Date.now(), cutoffHour);
 }
