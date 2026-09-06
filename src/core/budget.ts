@@ -68,3 +68,21 @@ export function supervise(
 export function canExempt(usedToday: number, exemptPerDay: number): boolean {
   return usedToday < exemptPerDay;
 }
+
+/**
+ * 专注模式（IT4）：focusUntil 生效期间，"可封锁类别"（nudge/budget 档）一律封锁，
+ * 且不弹横幅（专注期不走提醒协议）；hard 档本来就封；track 档永不封。
+ */
+export function focusBlocks(
+  action: 'track' | 'nudge' | 'budget' | 'hard',
+  focusUntil: number | undefined,
+  now: number,
+): boolean {
+  if (focusUntil === undefined || now >= focusUntil) return false;
+  return action === 'nudge' || action === 'budget';
+}
+
+/** 专注期间引导页不提供豁免（否则专注形同虚设） */
+export function exemptAllowedDuringFocus(focusUntil: number | undefined, now: number): boolean {
+  return !(focusUntil !== undefined && now < focusUntil);
+}

@@ -46,6 +46,8 @@ export interface Settings {
   exemptMinutes: number;
   /** 暂停监督截止时间戳（ms），undefined = 未暂停 */
   pauseUntil?: number;
+  /** 专注模式截止时间戳（ms），undefined = 未开启；期间封锁全部 nudge/budget 类别（IT4） */
+  focusUntil?: number;
 }
 
 export interface ClassifyResult {

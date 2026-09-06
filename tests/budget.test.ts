@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { budgetState, canExempt, supervise, usageByCategory } from '../src/core/budget';
+import { budgetState, canExempt, exemptAllowedDuringFocus, focusBlocks, supervise, usageByCategory } from '../src/core/budget';
 import type { Category, UsageRow } from '../src/core/types';
 
 const cat = (action: Category['action'], budgetMin?: number): Category => ({
@@ -80,5 +80,28 @@ describe('canExempt', () => {
     expect(canExempt(0, 2)).toBe(true);
     expect(canExempt(1, 2)).toBe(true);
     expect(canExempt(2, 2)).toBe(false);
+  });
+});
+
+describe('focusBlocks（IT4 专注模式）', () => {
+  const NOW = 1_000_000;
+  const UNTIL = NOW + 1_800_000;
+
+  it('专注期：nudge/budget 档被额外封锁，track 不受影响', () => {
+    expect(focusBlocks('nudge', UNTIL, NOW)).toBe(true);
+    expect(focusBlocks('budget', UNTIL, NOW)).toBe(true);
+    expect(focusBlocks('track', UNTIL, NOW)).toBe(false);
+    // hard 档无需专注模式参与：supervise 矩阵已无条件封锁（见上组用例）
+  });
+
+  it('非专注期：一律交给常规监督逻辑', () => {
+    expect(focusBlocks('budget', undefined, NOW)).toBe(false);
+    expect(focusBlocks('budget', NOW - 1, NOW)).toBe(false); // 已过期
+  });
+
+  it('专注期不提供豁免（否则专注形同虚设）', () => {
+    expect(exemptAllowedDuringFocus(UNTIL, NOW)).toBe(false);
+    expect(exemptAllowedDuringFocus(undefined, NOW)).toBe(true);
+    expect(exemptAllowedDuringFocus(NOW - 1, NOW)).toBe(true);
   });
 });

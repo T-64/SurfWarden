@@ -9,7 +9,7 @@ import {
   usageForDate,
 } from '../src/adapters/db';
 import { applyBlockRules, domainsByCategory, planBlockRules } from '../src/adapters/dnr';
-import { budgetState, supervise, usageByCategory } from '../src/core/budget';
+import { budgetState, exemptAllowedDuringFocus, focusBlocks, supervise, usageByCategory } from '../src/core/budget';
 import { initialState, step } from '../src/core/tracker';
 import type {
   Category,
@@ -104,12 +104,14 @@ export default defineBackground(() => {
       const st = budgetState(used.get(cat.id) ?? 0, cat.budgetMin);
       const d = supervise(cat, st, settings.pauseUntil, now);
       const stillExempt = (exempted[cat.id] ?? 0) > now;
-      if (d.block && !stillExempt) {
+      // 专注模式（IT4）：nudge/budget 档在专注期无条件封锁
+      const inFocus = focusBlocks(cat.action, settings.focusUntil, now);
+      if ((d.block || inFocus) && !stillExempt) {
         const domains = domainMap.get(cat.id);
         if (domains && domains.size > 0) blocked.set(cat.id, domains);
       }
-      // 横幅：状态跃迁时发一次（exhausted 期间每 30 分钟重提醒一次）
-      if (d.banner && cat.action !== 'track') {
+      // 横幅：状态跃迁时发一次（专注期静默——不打断心流）
+      if (d.banner && !inFocus && cat.action !== 'track') {
         const prev = lastBannerState.get(cat.id);
         if (prev !== st) {
           lastBannerState.set(cat.id, st);
@@ -172,8 +174,9 @@ export default defineBackground(() => {
       budgetMin !== undefined
         ? `「${cat.name}」今日剩约 ${remain} 分钟（已用 ${Math.floor(usedSec / 60)} 分钟）`
         : `「${cat.name}」已连续使用较久，注意休息`;
+    const ratio = budgetMin !== undefined ? Math.min(1, usedSec / (budgetMin * 60)) : undefined;
     try {
-      await chrome.tabs.sendMessage(cur.tabId, { type: 'sw-nudge', text });
+      await chrome.tabs.sendMessage(cur.tabId, { type: 'sw-nudge', text, ratio });
     } catch {
       // 该 tab 无 content script（扩展页/商店页等），忽略
     }
@@ -220,6 +223,10 @@ export default defineBackground(() => {
           sendResponse({ ok: false, reason: 'exempt-exhausted' });
           return;
         }
+        if (!exemptAllowedDuringFocus(settings.focusUntil, Date.now())) {
+          sendResponse({ ok: false, reason: 'focus' }); // 专注期不提供豁免（ADR：否则专注形同虚设）
+          return;
+        }
         const exempted = await getExempted();
         exempted[catId] = Date.now() + settings.exemptMinutes * 60_000;
         await setExempted(exempted);
@@ -256,6 +263,22 @@ export default defineBackground(() => {
         }
         return;
       }
+      if (msg?.type === 'sw-focus') {
+        // 专注模式（IT4）：N 分钟封锁全部 nudge/budget 类别
+        const minutes = Math.max(1, Math.min(240, Number(msg.minutes ?? 30)));
+        const s = await configStore.getSettings();
+        await configStore.saveSettings({ ...s, focusUntil: Date.now() + minutes * 60_000 });
+        chrome.alarms.create('sw-focus-end', { when: Date.now() + minutes * 60_000 });
+        sendResponse({ ok: true });
+        return;
+      }
+      if (msg?.type === 'sw-focus-end') {
+        const s = await configStore.getSettings();
+        await configStore.saveSettings({ ...s, focusUntil: undefined });
+        await budgetCheckpoint();
+        sendResponse({ ok: true });
+        return;
+      }
       sendResponse({ ok: false, reason: 'unknown-message' });
     })();
     return true; // 异步 sendResponse
@@ -277,6 +300,16 @@ export default defineBackground(() => {
         await purgeSessionsOlderThan(90); // 明细 90 天保留策略（data-model §2）
         await budgetCheckpoint();
         scheduleDaycut((await configStore.getSettings()).dayCutoffHour);
+      })();
+      return;
+    }
+    if (a.name === 'sw-focus-end') {
+      void (async () => {
+        const s = await configStore.getSettings();
+        if (s.focusUntil !== undefined && s.focusUntil <= Date.now()) {
+          await configStore.saveSettings({ ...s, focusUntil: undefined });
+          await budgetCheckpoint();
+        }
       })();
       return;
     }

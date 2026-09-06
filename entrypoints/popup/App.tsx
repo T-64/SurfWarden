@@ -267,6 +267,37 @@ export function App() {
         </div>
       )}
 
+      {/* 专注模式（IT4） */}
+      {(() => {
+        const focusActive = settings.focusUntil !== undefined && Date.now() < settings.focusUntil;
+        if (focusActive) {
+          const remain = Math.max(0, Math.ceil(((settings.focusUntil ?? 0) - Date.now()) / 60_000));
+          return (
+            <div className="od-card-raised" style={{ padding: '9px 12px', marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 12, color: 'var(--ink)' }}>🎯 专注中 · 剩 <span className="od-stat">{remain}</span> 分</span>
+              <button className="od-btn-mini" disabled={busy} onClick={() => void chrome.runtime.sendMessage({ type: 'sw-focus-end' }).then(refresh)}>
+                结束
+              </button>
+            </div>
+          );
+        }
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 12 }}>
+            <span className="od-caption" style={{ margin: 0 }}>专注</span>
+            {[30, 45, 60].map((m) => (
+              <button
+                key={m}
+                className="od-btn-mini"
+                disabled={busy}
+                onClick={() => void chrome.runtime.sendMessage({ type: 'sw-focus', minutes: m }).then(refresh)}
+              >
+                {m}′
+              </button>
+            ))}
+          </div>
+        );
+      })()}
+
       {/* 底栏 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
         {paused ? (

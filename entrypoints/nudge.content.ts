@@ -3,13 +3,13 @@ export default defineContentScript({
   runAt: 'document_idle',
   main() {
     chrome.runtime.onMessage.addListener((msg: unknown) => {
-      const m = msg as { type?: string; text?: string } | null;
-      if (m?.type === 'sw-nudge' && m.text) showBanner(m.text);
+      const m = msg as { type?: string; text?: string; ratio?: number } | null;
+      if (m?.type === 'sw-nudge' && m.text) showBanner(m.text, m.ratio);
       return false; // 同步、无异步响应
     });
 
     /** 非侵入顶部横幅（shadow DOM 隔离样式），6 秒自动消失 */
-    function showBanner(text: string): void {
+    function showBanner(text: string, ratio?: number): void {
       document.getElementById('surfwarden-nudge')?.remove();
       const host = document.createElement('div');
       host.id = 'surfwarden-nudge';
@@ -38,9 +38,21 @@ export default defineContentScript({
       const tag = document.createElement('span');
       tag.className = 'tag';
       tag.textContent = 'NUDGE';
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'flex:1; min-width:0;';
+      wrap.appendChild(document.createTextNode(text));
+      if (ratio !== undefined) {
+        const meter = document.createElement('div');
+        meter.style.cssText =
+          'margin-top:6px; height:3px; border-radius:99px; background:rgba(255,255,255,0.08); overflow:hidden;';
+        const fill = document.createElement('i');
+        fill.style.cssText = `display:block; height:100%; width:${Math.round(ratio * 100)}%; background:#ffb224; border-radius:99px;`;
+        meter.appendChild(fill);
+        wrap.appendChild(meter);
+      }
       const bar = document.createElement('div');
       bar.className = 'bar';
-      bar.append(tag, document.createTextNode(text));
+      bar.append(tag, wrap);
       shadow.append(style, bar);
       document.documentElement.appendChild(host);
       window.setTimeout(() => host.remove(), 6_000);

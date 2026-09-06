@@ -84,8 +84,8 @@ if (!page.url().startsWith('https://example.com')) {
 }
 await page.waitForTimeout(4_000); // 产生段
 
-// ---- 2. 切走到中性站，触发段闭合与检查点 ----
-await page.goto('https://www.iana.org/', { waitUntil: 'load' });
+// ---- 2. 切走到不可追踪页，触发段闭合与检查点（不依赖外网） ----
+await page.goto('about:blank');
 await page.waitForTimeout(2_000);
 
 // ---- 3. 再次访问：应被 DNR 重定向到引导页 ----

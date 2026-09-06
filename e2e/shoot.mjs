@@ -105,6 +105,14 @@ async function seedDemoData() {
     for (const r of rows) await put(db, 'usageDaily', r);
     for (const s of sessions) await put(db, 'sessions', s);
     db.close();
+    // 专注模式演示状态（IT4）
+    await chrome.storage.local.set({
+      settings: {
+        dayCutoffHour: 0, idleGraceSec: 60, idleThresholdSec: 3600,
+        exemptPerDay: 2, exemptMinutes: 5,
+        focusUntil: Date.now() + 22 * 60_000,
+      },
+    });
   });
   await page.close();
 }

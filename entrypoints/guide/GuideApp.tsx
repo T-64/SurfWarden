@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { canExempt } from '../../src/core/budget';
+import { canExempt, exemptAllowedDuringFocus } from '../../src/core/budget';
 import { configStore } from '../../src/adapters/configStore';
 import { exemptCountForDate, todayKey, usageForDate } from '../../src/adapters/db';
 import type { Category, StudyTarget, UsageRow } from '../../src/core/types';
@@ -18,6 +18,7 @@ export function GuideApp() {
     targets: StudyTarget[];
     budgetMin?: number;
     backUrl: string;
+    focusRemainMin: number | null;
   } | null>(null);
   const [exemptError, setExemptError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -45,6 +46,10 @@ export function GuideApp() {
         targets,
         budgetMin: cats.find((c) => c.id === catId)?.budgetMin,
         backUrl,
+        focusRemainMin:
+          settings.focusUntil !== undefined && Date.now() < settings.focusUntil
+            ? Math.ceil((settings.focusUntil - Date.now()) / 60_000)
+            : null,
       });
     })();
   }, []);
@@ -80,13 +85,19 @@ export function GuideApp() {
       style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}
     >
       <div className="od-card" style={{ width: 560, maxWidth: '100%', padding: 28, background: 'var(--surface)' }}>
-        {/* 顶部：类别键帽 + 检查点标签 */}
+        {/* 顶部：类别键帽 + 检查点标签 / 专注状态 */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span className="od-key">
             <span className="k-dot" style={{ background: catColor }} />
             {catName}
           </span>
-          <span className="od-caption">CHECKPOINT</span>
+          {info.focusRemainMin !== null ? (
+            <span className="od-pill" style={{ color: 'var(--green)', borderColor: 'rgba(61,220,132,0.35)' }}>
+              🎯 专注中 · 剩 {info.focusRemainMin} 分
+            </span>
+          ) : (
+            <span className="od-caption">CHECKPOINT</span>
+          )}
         </div>
 
         {/* 仪表读数 */}
@@ -122,13 +133,15 @@ export function GuideApp() {
           </div>
         </div>
 
-        {/* 侧路：豁免 / 关闭（次要位置，如实计数） */}
+        {/* 侧路：豁免 / 关闭（次要位置，如实计数；专注期不提供豁免） */}
         <div style={{ marginTop: 18 }}>
           <p className="od-caption" style={{ margin: '0 0 8px' }}>侧路</p>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button className="od-btn od-btn-ghost" disabled={busy || info.exemptLeft <= 0} onClick={() => void doExempt()}>
-              ⏱ 再来 5 分钟{info.exemptLeft > 0 ? ` · 剩 ${info.exemptLeft} 次` : '（今日已用完）'}
-            </button>
+            {info.focusRemainMin === null && (
+              <button className="od-btn od-btn-ghost" disabled={busy || info.exemptLeft <= 0} onClick={() => void doExempt()}>
+                ⏱ 再来 5 分钟{info.exemptLeft > 0 ? ` · 剩 ${info.exemptLeft} 次` : '（今日已用完）'}
+              </button>
+            )}
             <button className="od-btn od-btn-ghost" onClick={() => window.close()}>
               ✕ 关掉这个页
             </button>
