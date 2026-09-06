@@ -1,0 +1,176 @@
+/**
+ * OpsDeck 哨站设计系统 v1（ADR-0010）
+ * 骨架：Raycast 式暗色纪律（表面阶梯/发丝线/零阴影/白色主CTA）
+ * 个性：语义信号色（绿/琥珀/红）、等宽仪表读数、键帽徽章、点阵网格
+ */
+
+:root {
+  /* 表面阶梯——深度只靠提亮，不用阴影 */
+  --canvas: #0b0c0e;
+  --surface: #131518;
+  --elevated: #1a1d21;
+  --card: #20242a;
+  /* 发丝线 */
+  --line: #262b31;
+  --line-soft: rgba(255, 255, 255, 0.06);
+  /* 文本 */
+  --ink: #f2f4f7;
+  --body: #c9ced6;
+  --mute: #8b929c;
+  --faint: #565d68;
+  /* 语义信号色——灰阶界面中唯一的饱和色 */
+  --green: #3ddc84;
+  --amber: #ffb224;
+  --red: #ff5c5c;
+  --green-soft: rgba(61, 220, 132, 0.13);
+  --amber-soft: rgba(255, 178, 36, 0.13);
+  --red-soft: rgba(255, 92, 92, 0.13);
+  /* 字体 */
+  --sans: -apple-system, 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+  /* 圆角三档 */
+  --r-s: 4px;
+  --r-m: 8px;
+  --r-l: 10px;
+}
+
+/* ---------- 基座 ---------- */
+
+.od-app {
+  background: var(--canvas);
+  color: var(--body);
+  font: 13px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.od-app ::selection { background: rgba(61, 220, 132, 0.25); }
+
+/* 点阵网格——哨站雷达隐喻，每屏最多一处 */
+.od-dots {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* ---------- 排印 ---------- */
+
+.od-caption {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.od-stat {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.od-heading { font-size: 15px; font-weight: 600; color: var(--ink); }
+
+/* ---------- 表面 ---------- */
+
+.od-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-l);
+}
+
+.od-card-raised { background: var(--elevated); border: 1px solid var(--line); border-radius: var(--r-l); }
+
+/* ---------- 按钮 ---------- */
+
+.od-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  font: 600 13px/1 var(--sans);
+  padding: 9px 14px; border-radius: var(--r-m);
+  border: 1px solid transparent; cursor: pointer; text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+.od-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 主操作：白色实心（黑字）——Raycast 纪律 */
+.od-btn-primary { background: #ffffff; color: #000000; }
+.od-btn-primary:hover:not(:disabled) { background: #e8e8e8; }
+
+/* 信号绿主操作——引导页"去学习"专用 */
+.od-btn-signal { background: var(--green); color: #04160c; }
+.od-btn-signal:hover:not(:disabled) { background: #5fe69c; }
+
+.od-btn-ghost { background: transparent; color: var(--body); border-color: var(--line); }
+.od-btn-ghost:hover:not(:disabled) { background: var(--elevated); }
+
+.od-btn-mini {
+  font: 500 12px/1 var(--sans); color: var(--mute);
+  background: var(--elevated); border: 1px solid var(--line);
+  padding: 6px 10px; border-radius: var(--r-s); cursor: pointer;
+}
+.od-btn-mini:hover:not(:disabled) { color: var(--ink); background: var(--card); }
+.od-btn-mini:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.od-btn-danger { color: var(--red); border-color: rgba(255, 92, 92, 0.3); background: transparent; }
+.od-btn-danger:hover:not(:disabled) { background: var(--red-soft); }
+
+/* ---------- 键帽徽章（签名装饰） ---------- */
+
+.od-key {
+  display: inline-flex; align-items: center; gap: 5px;
+  font: 600 11px/1 var(--mono); font-variant-numeric: tabular-nums;
+  padding: 4px 8px; border-radius: var(--r-s);
+  background: linear-gradient(180deg, var(--card), var(--elevated));
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.od-key .k-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+
+/* 状态胶囊 */
+.od-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  font: 500 11px/1 var(--sans);
+  padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line);
+  color: var(--mute); background: var(--elevated);
+}
+.od-pill .p-dot { width: 6px; height: 6px; border-radius: 50%; }
+
+/* ---------- 仪表 ---------- */
+
+.od-meter { height: 6px; border-radius: 999px; background: var(--elevated); overflow: hidden; }
+.od-meter > i { display: block; height: 100%; border-radius: 999px; transition: width 0.4s ease; }
+
+.od-meter-row { display: flex; justify-content: space-between; align-items: baseline; }
+
+/* ---------- 列表行 ---------- */
+
+.od-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 0; border-bottom: 1px solid var(--line-soft);
+}
+.od-row:last-child { border-bottom: none; }
+.od-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--body); }
+
+/* ---------- 表单控件（暗色） ---------- */
+
+.od-input, .od-select {
+  font: 400 13px/1.4 var(--sans);
+  background: var(--elevated); color: var(--ink);
+  border: 1px solid var(--line); border-radius: var(--r-m);
+  padding: 6px 9px; width: 100%;
+}
+.od-input:focus, .od-select:focus { outline: none; border-color: var(--faint); }
+.od-input::placeholder { color: var(--faint); }
+
+/* ---------- 表格（options） ---------- */
+
+.od-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.od-table th {
+  text-align: left; font: 600 11px/1 var(--sans); letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--mute); padding: 8px; border-bottom: 1px solid var(--line);
+}
+.od-table td { padding: 6px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+
+/* ---------- 布局工具 ---------- */
+
+.od-stack > * + * { margin-top: 8px; }
+.od-section { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }

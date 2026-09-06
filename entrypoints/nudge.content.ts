@@ -21,16 +21,26 @@ export default defineContentScript({
         .bar {
           margin: 10px auto 0; max-width: 560px; width: calc(100% - 24px);
           box-sizing: border-box; padding: 10px 16px; border-radius: 10px;
-          background: rgba(17, 24, 39, 0.92); color: #f9fafb;
+          background: rgba(19, 21, 24, 0.96); color: #c9ced6;
+          border: 1px solid #262b31;
           font: 13px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-          box-shadow: 0 6px 24px rgba(0,0,0,0.25);
+          box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+          display: flex; align-items: center; gap: 10px;
           animation: sw-in 0.25s ease-out;
+        }
+        .bar .tag {
+          font: 600 10px/1 ui-monospace, Menlo, monospace; letter-spacing: 0.08em;
+          color: #ffb224; border: 1px solid rgba(255,178,36,0.3);
+          padding: 3px 7px; border-radius: 4px; flex: none;
         }
         @keyframes sw-in { from { transform: translateY(-8px); opacity: 0; } }
       `;
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = 'NUDGE';
       const bar = document.createElement('div');
       bar.className = 'bar';
-      bar.textContent = `⏳ ${text}`;
+      bar.append(tag, document.createTextNode(text));
       shadow.append(style, bar);
       document.documentElement.appendChild(host);
       window.setTimeout(() => host.remove(), 6_000);

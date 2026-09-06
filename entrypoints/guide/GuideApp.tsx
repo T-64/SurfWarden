@@ -3,11 +3,12 @@ import { canExempt } from '../../src/core/budget';
 import { configStore } from '../../src/adapters/configStore';
 import { exemptCountForDate, todayKey, usageForDate } from '../../src/adapters/db';
 import type { Category, StudyTarget, UsageRow } from '../../src/core/types';
-import { formatDuration } from '../../src/shared/format';
+import { formatClock, formatDuration } from '../../src/shared/format';
+import '../../src/shared/theme.css';
 
 /**
- * 引导页（PRODUCT.md §3.5）：不是死胡同，是岔路口。
- * 主按钮永远是"去学习"（默认选项效应），豁免放次要位置且如实计数。
+ * 引导页 = 检查点（PRODUCT.md §3.5）：不是死胡同，是岔路口。
+ * OpsDeck：点阵雷达背景 + 等宽仪表读数 + 信号绿主路（默认选项效应）。
  */
 export function GuideApp() {
   const [info, setInfo] = useState<{
@@ -48,9 +49,15 @@ export function GuideApp() {
     })();
   }, []);
 
-  if (!info) return <div className="card">加载中…</div>;
+  if (!info) {
+    return (
+      <div className="od-app" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
+        <p className="od-caption">CHECKPOINT…</p>
+      </div>
+    );
+  }
   const catName = info.cat?.name ?? '该类别';
-  const catColor = info.cat?.color ?? '#6b7280';
+  const catColor = info.cat?.color ?? 'var(--mute)';
   const budgetSec = info.budgetMin !== undefined ? info.budgetMin * 60 : undefined;
   const ratio = budgetSec ? Math.min(1, info.usedSec / budgetSec) : 1;
 
@@ -68,47 +75,79 @@ export function GuideApp() {
   }
 
   return (
-    <div className="card">
-      <span className="tag" style={{ background: catColor }}>
-        {catName}
-      </span>
-      <h1>今天的「{catName}」时间用完了</h1>
-      <div className="sub">
-        {budgetSec !== undefined
-          ? `已用 ${formatDuration(info.usedSec)} / 预算 ${formatDuration(budgetSec)}`
-          : `已用 ${formatDuration(info.usedSec)}`}
-      </div>
-      <div className="meter">
-        <i style={{ width: `${Math.round(ratio * 100)}%`, background: catColor }} />
-      </div>
-      <div className="stat">这一周你都在往哪走，值得看一眼 —— 不如现在就回正事上。</div>
+    <div
+      className="od-app od-dots"
+      style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}
+    >
+      <div className="od-card" style={{ width: 560, maxWidth: '100%', padding: 28, background: 'var(--surface)' }}>
+        {/* 顶部：类别键帽 + 检查点标签 */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span className="od-key">
+            <span className="k-dot" style={{ background: catColor }} />
+            {catName}
+          </span>
+          <span className="od-caption">CHECKPOINT</span>
+        </div>
 
-      <div className="targets">
-        {info.targets.length === 0 ? (
-          <div className="empty">
-            还没配置学习目标。去插件 Options 页添加一个（比如你的德语课链接），这里就会出现一键直达。
+        {/* 仪表读数 */}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 18 }}>
+          <span className="od-stat" style={{ fontSize: 40, fontWeight: 600 }}>{formatClock(info.usedSec)}</span>
+          {budgetSec !== undefined && (
+            <span className="od-stat" style={{ fontSize: 16, color: 'var(--faint)' }}>/ {formatClock(budgetSec)}</span>
+          )}
+        </div>
+        <div className="od-meter" style={{ marginTop: 10, height: 8 }}>
+          <i style={{ width: `${Math.round(ratio * 100)}%`, background: catColor }} />
+        </div>
+        <p className="od-caption" style={{ margin: '8px 0 0', letterSpacing: 0 }}>
+          今天的「{catName}」额度已用完
+        </p>
+
+        {/* 主路：学习目标（默认选项效应——信号绿） */}
+        <div style={{ marginTop: 22 }}>
+          <p className="od-caption" style={{ margin: '0 0 8px' }}>正路</p>
+          <div className="od-stack">
+            {info.targets.length === 0 ? (
+              <div className="od-card-raised" style={{ padding: '12px 14px', fontSize: 12, color: 'var(--mute)' }}>
+                还没配置学习目标。去 Options 页添加（比如你的德语课链接），这里就会出现一键直达。
+              </div>
+            ) : (
+              info.targets.map((t) => (
+                <a key={t.id} className="od-btn od-btn-signal" href={t.url} style={{ justifyContent: 'space-between' }}>
+                  <span>📗 去学习：{t.name}</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11, opacity: 0.7 }}>GO →</span>
+                </a>
+              ))
+            )}
           </div>
-        ) : (
-          info.targets.map((t) => (
-            <a key={t.id} className="btn btn-primary" href={t.url}>
-              📗 去学习：{t.name}
-            </a>
-          ))
-        )}
-      </div>
+        </div>
 
-      <div className="row">
-        <button className="btn-mini" disabled={busy || info.exemptLeft <= 0} onClick={() => void doExempt()}>
-          再来 {info.exemptLeft > 0 ? '5 分钟' : ''}
-          {info.exemptLeft > 0 ? `（剩 ${info.exemptLeft} 次）` : '（今日豁免已用完）'}
-        </button>
-        <button className="btn-mini" onClick={() => window.close()}>
-          关掉这个页
-        </button>
-      </div>
-      {exemptError && <div className="hint">{exemptError}</div>}
-      <div className="hint">
-        豁免是有限资源：今天用了几次，报告里都会如实记着。本页由 SurfWarden 生成，数据仅存本机。
+        {/* 侧路：豁免 / 关闭（次要位置，如实计数） */}
+        <div style={{ marginTop: 18 }}>
+          <p className="od-caption" style={{ margin: '0 0 8px' }}>侧路</p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="od-btn od-btn-ghost" disabled={busy || info.exemptLeft <= 0} onClick={() => void doExempt()}>
+              ⏱ 再来 5 分钟{info.exemptLeft > 0 ? ` · 剩 ${info.exemptLeft} 次` : '（今日已用完）'}
+            </button>
+            <button className="od-btn od-btn-ghost" onClick={() => window.close()}>
+              ✕ 关掉这个页
+            </button>
+          </div>
+          {exemptError && <p style={{ color: 'var(--red)', fontSize: 12, marginBottom: 0 }}>{exemptError}</p>}
+        </div>
+
+        {/* 底注 */}
+        <div
+          style={{
+            marginTop: 22, paddingTop: 12, borderTop: '1px solid var(--line-soft)',
+            display: 'flex', justifyContent: 'space-between', gap: 12,
+          }}
+        >
+          <span className="od-caption" style={{ textTransform: 'none', letterSpacing: 0 }}>
+            豁免是有限资源，用几次都会如实记录
+          </span>
+          <span className="od-caption" style={{ flex: 'none' }}>LOCAL ONLY</span>
+        </div>
       </div>
     </div>
   );

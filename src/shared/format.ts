@@ -5,3 +5,10 @@ export function formatDuration(seconds: number): string {
   const m = Math.round((seconds % 3600) / 60);
   return h > 0 ? `${h} 小时 ${m} 分` : `${m} 分钟`;
 }
+
+/** 仪表读数（紧凑时钟）：1:02、12:05（OpsDeck 风格） */
+export function formatClock(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return `${h}:${String(m).padStart(2, '0')}`;
+}

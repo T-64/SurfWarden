@@ -11,10 +11,10 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 export const DEFAULT_CATEGORIES: Category[] = [
-  { id: 'learning', name: '学习', color: '#16a34a', action: 'track' },
-  { id: 'work', name: '工作', color: '#2563eb', action: 'track' },
-  { id: 'entertainment', name: '娱乐', color: '#dc2626', budgetMin: 45, action: 'nudge' },
-  { id: 'neutral', name: '中性', color: '#6b7280', action: 'track' },
+  { id: 'learning', name: '学习', color: '#3ddc84', action: 'track' },
+  { id: 'work', name: '工作', color: '#57c1ff', action: 'track' },
+  { id: 'entertainment', name: '娱乐', color: '#ff5c5c', budgetMin: 45, action: 'nudge' },
+  { id: 'neutral', name: '中性', color: '#8b929c', action: 'track' },
 ];
 
 /**

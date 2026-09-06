@@ -33,14 +33,24 @@ export const configStore = {
   saveSettings: (s: Settings) => set(K.settings, s),
   saveStudyTargets: (t: StudyTarget[]) => set(K.studyTargets, t),
 
-  /** 首次安装写入默认值；已存在的键不动 */
+  /** 首次安装写入默认值；已存在的键不动（默认类别的颜色除外——0.4 迁移到 OpsDeck 色板） */
   async ensureDefaults(): Promise<void> {
     const o = await chrome.storage.local.get([K.rules, K.categories, K.settings]);
     const patch: Record<string, unknown> = {};
     if (o[K.rules] === undefined) patch[K.rules] = DEFAULT_RULES;
-    if (o[K.categories] === undefined) patch[K.categories] = DEFAULT_CATEGORIES;
+    if (o[K.categories] === undefined) {
+      patch[K.categories] = DEFAULT_CATEGORIES;
+    } else {
+      // 迁移：默认 id 的颜色刷新为 OpsDeck 色板（ADR-0010）；自定义类别不动
+      const stored = o[K.categories] as Category[];
+      const recolored = stored.map((c) => {
+        const def = DEFAULT_CATEGORIES.find((d) => d.id === c.id);
+        return def ? { ...c, color: def.color } : c;
+      });
+      patch[K.categories] = recolored;
+    }
     if (o[K.settings] === undefined) patch[K.settings] = DEFAULT_SETTINGS;
-    if (Object.keys(patch).length > 0) await chrome.storage.local.set(patch);
+    await chrome.storage.local.set(patch);
   },
 
   /** 配置变化（options 页保存等）时刷新内存缓存用 */
