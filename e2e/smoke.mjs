@@ -83,9 +83,9 @@ await page.goto('https://example.com/', { waitUntil: 'load' });
 await page.waitForTimeout(4_000);
 console.log('[smoke][S1 example.com]', JSON.stringify(await probe.evaluate(`(${readProbe})()`)));
 
-await page.goto('https://www.iana.org/', { waitUntil: 'load' });
+await page.goto('about:blank'); // 中性不可追踪页，同样触发段闭合（去外网依赖）
 await page.waitForTimeout(4_000);
-console.log('[smoke][S2 iana.org]', JSON.stringify(await probe.evaluate(`(${readProbe})()`)));
+console.log('[smoke][S2 after switch]', JSON.stringify(await probe.evaluate(`(${readProbe})()`)));
 
 await page.goto('about:blank');
 await page.waitForTimeout(2_000);
@@ -98,7 +98,7 @@ await popup.waitForTimeout(1_500);
 const text = await popup.locator('body').innerText();
 console.log('[smoke] popup body:\n' + text);
 
-const ok = text.includes('iana.org') || text.includes('example.com');
+const ok = text.includes('example.com');
 console.log(ok ? '[smoke] PASS' : '[smoke] FAIL: popup 未出现期望站点');
 await ctx.close();
 process.exit(ok ? 0 : 1);

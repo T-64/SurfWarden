@@ -1,6 +1,6 @@
 {
   "name": "surfwarden",
-  "version": "0.8.0",
+  "version": "2.0.0",
   "description": "本地优先的网页时间统计与监督插件：分用途记录，而不是域名一刀切。",
   "private": true,
   "type": "module",
