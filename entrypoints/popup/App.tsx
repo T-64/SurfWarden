@@ -274,7 +274,12 @@ export function App() {
         ) : (
           <button className="od-btn-mini" disabled={busy} onClick={() => void pause30()}>暂停监督 30′</button>
         )}
-        <span className="od-caption" style={{ letterSpacing: 0 }}>v{chrome.runtime.getManifest().version} · LOCAL ONLY</span>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button className="od-btn-mini" onClick={() => chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') })}>
+            📊 报告
+          </button>
+          <span className="od-caption" style={{ letterSpacing: 0 }}>v{chrome.runtime.getManifest().version}</span>
+        </div>
       </div>
     </div>
   );
