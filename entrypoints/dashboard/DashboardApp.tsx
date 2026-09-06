@@ -89,7 +89,7 @@ export function DashboardApp() {
   const maxHost = Math.max(1, ...topHosts.map((h) => h.seconds));
 
   return (
-    <div className="od-app" style={{ minHeight: '100vh', padding: '28px 36px 48px', maxWidth: 1080, margin: '0 auto' }}>
+    <div className="od-app" data-accent={data?.settings.accent ?? 'signal'} style={{ minHeight: '100vh', padding: '28px 36px 48px', maxWidth: 1080, margin: '0 auto' }}>
       {/* 头部 */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
         <div>

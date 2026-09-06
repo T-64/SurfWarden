@@ -82,6 +82,7 @@ export function GuideApp() {
   return (
     <div
       className="od-app od-dots"
+      data-accent="signal"
       style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}
     >
       <div className="od-card" style={{ width: 560, maxWidth: '100%', padding: 28, background: 'var(--surface)' }}>

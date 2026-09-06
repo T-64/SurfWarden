@@ -8,6 +8,7 @@ export const DEFAULT_SETTINGS: Settings = {
   idleThresholdSec: 60,
   exemptPerDay: 2,
   exemptMinutes: 5,
+  accent: 'signal',
 };
 
 export const DEFAULT_CATEGORIES: Category[] = [

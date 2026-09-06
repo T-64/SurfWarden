@@ -4,7 +4,7 @@ import { db } from '../../src/adapters/db';
 import { lookupCatalog } from '../../src/core/siteCatalog';
 import { parsePattern } from '../../src/core/urlMatch';
 import type { Category, Rule, Settings, StudyTarget } from '../../src/core/types';
-import { TEMPLATE_PACKS } from '../../src/shared/defaults';
+import { TEMPLATE_PACKS, DEFAULT_RULES } from '../../src/shared/defaults';
 
 /** 目录命中的组徽章文本（识别而非回忆，启发式 #6） */
 function groupOf(pattern: string): string | null {
@@ -44,6 +44,13 @@ export function OptionsApp() {
     reload();
     chrome.extension.isAllowedIncognitoAccess((allowed) => setIncognito(allowed));
   }, [reload]);
+
+  // 主题强调色应用到根节点
+  useEffect(() => {
+    if (settings?.accent) {
+      document.querySelector('.od-app')?.setAttribute('data-accent', settings.accent);
+    }
+  }, [settings?.accent]);
 
   function flash(): void {
     setSavedAt(Date.now());
@@ -121,6 +128,39 @@ export function OptionsApp() {
       <h1>SurfWarden 设置</h1>
       <p className="muted">所有数据仅存本机，无任何网络请求。保存后立即生效（后台热更新）。</p>
       {savedAt > 0 && <p className="ok">✓ 已保存</p>}
+
+      {/* 新手完成度清单（IT5） */}
+      {settings && (
+        <section>
+          <h2>🚀 初始设置</h2>
+          {(() => {
+            const steps = [
+              { label: '开启隐身授权（不留监督后门）', done: incognito === true },
+              { label: '配置学习目标（引导页"去学习"的入口）', done: targets.length > 0 },
+              { label: '设定监督档位（娱乐类 ≠ 只统计）', done: cats.find((c) => c.id === 'entertainment')?.action !== 'track' },
+              { label: '导入模板包或添加自定义规则', done: rules.length > DEFAULT_RULES.length },
+            ];
+            const doneCount = steps.filter((s) => s.done).length;
+            return (
+              <>
+                <div className="od-meter-row" style={{ marginBottom: 6 }}>
+                  <span className="muted" style={{ margin: 0 }}>完成 {doneCount} / {steps.length}</span>
+                  <span className="ok" style={{ fontSize: 12 }}>{doneCount === steps.length ? '✓ 全部就绪' : ''}</span>
+                </div>
+                <div className="meter-like" style={{ height: 6, borderRadius: 99, background: 'var(--elevated)', overflow: 'hidden', marginBottom: 10 }}>
+                  <div style={{ height: '100%', width: `${(doneCount / steps.length) * 100}%`, background: 'var(--green)', borderRadius: 99 }} />
+                </div>
+                {steps.map((s) => (
+                  <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', fontSize: 13 }}>
+                    <span style={{ color: s.done ? 'var(--green)' : 'var(--faint)' }}>{s.done ? '✓' : '○'}</span>
+                    <span style={{ color: s.done ? 'var(--body)' : 'var(--mute)' }}>{s.label}</span>
+                  </div>
+                ))}
+              </>
+            );
+          })()}
+        </section>
+      )}
 
       <section>
         <h2>🔒 隐身窗口覆盖</h2>
@@ -401,6 +441,22 @@ export function OptionsApp() {
                 value={settings.exemptMinutes}
                 onChange={(e) => setSettings({ ...settings, exemptMinutes: Number(e.target.value) })}
               />
+            </label>
+            <label className="field">
+              主题强调色
+              <select
+                value={settings.accent ?? 'signal'}
+                onChange={(e) => {
+                  const next = { ...settings, accent: e.target.value as Settings['accent'] };
+                  setSettings(next);
+                  void configStore.saveSettings(next);
+                }}
+              >
+                <option value="signal">信号绿（默认）</option>
+                <option value="cyan">雷达青</option>
+                <option value="violet">暗夜紫</option>
+                <option value="amber">琥珀</option>
+              </select>
             </label>
           </div>
         )}

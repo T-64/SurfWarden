@@ -34,6 +34,21 @@
   --r-l: 10px;
 }
 
+/* ---------- 主题强调色变体（IT5）：signal（默认）/ cyan / violet ---------- */
+
+.od-app[data-accent='cyan'] {
+  --green: #4cc9f0;
+  --green-soft: rgba(76, 201, 240, 0.13);
+}
+.od-app[data-accent='violet'] {
+  --green: #a78bfa;
+  --green-soft: rgba(167, 139, 250, 0.13);
+}
+.od-app[data-accent='amber'] {
+  --green: #ffb224;
+  --green-soft: rgba(255, 178, 36, 0.13);
+}
+
 /* ---------- 基座 ---------- */
 
 .od-app {

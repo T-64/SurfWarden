@@ -48,6 +48,8 @@ export interface Settings {
   pauseUntil?: number;
   /** 专注模式截止时间戳（ms），undefined = 未开启；期间封锁全部 nudge/budget 类别（IT4） */
   focusUntil?: number;
+  /** 主题强调色变体（IT5）：signal | cyan | violet | amber */
+  accent?: 'signal' | 'cyan' | 'violet' | 'amber';
 }
 
 export interface ClassifyResult {

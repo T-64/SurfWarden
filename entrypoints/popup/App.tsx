@@ -129,7 +129,7 @@ export function App() {
   const entState = ent ? budgetState(entUsed, ent.budgetMin) : 'ok';
 
   return (
-    <div className="od-app" style={{ width: 340, padding: '14px 16px 12px' }}>
+    <div className="od-app" data-accent={settings.accent ?? 'signal'} style={{ width: 340, padding: '14px 16px 12px' }}>
       {/* 品牌行 */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
         <span className="od-caption" style={{ color: 'var(--ink)' }}>
