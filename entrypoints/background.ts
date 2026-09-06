@@ -35,6 +35,7 @@ interface CurrentInfo {
   url: string;
   host: string;
   categoryId: string;
+  ruleId?: string;
   startedAt: number;
   incognito: boolean;
 }
@@ -189,6 +190,7 @@ export default defineBackground(() => {
               url: cur.url,
               host: cur.host,
               categoryId: cur.categoryId,
+              ruleId: cur.ruleId,
               startedAt: cur.startedAt,
               incognito: cur.incognito,
             }
@@ -227,6 +229,31 @@ export default defineBackground(() => {
           when: exempted[catId],
         });
         sendResponse({ ok: true, remaining: settings.exemptPerDay - used - 1 });
+        return;
+      }
+      if (msg?.type === 'sw-add-rule') {
+        // 建议采纳流（ADR-0011）：popup 采纳目录建议 → 写入规则，下次起规则优先
+        const pattern = String(msg.pattern ?? '');
+        const category = String(msg.category ?? '');
+        if (pattern && category) {
+          const rules = await configStore.getRules();
+          if (!rules.some((r) => r.pattern === pattern)) {
+            await configStore.saveRules([
+              ...rules,
+              {
+                id: `r-${Date.now()}`,
+                name: String(msg.name ?? pattern),
+                pattern,
+                category,
+                enabled: true,
+                createdAt: rules.reduce((m, r) => Math.max(m, r.createdAt), 0) + 1,
+              },
+            ]);
+          }
+          sendResponse({ ok: true });
+        } else {
+          sendResponse({ ok: false, reason: 'bad-args' });
+        }
         return;
       }
       sendResponse({ ok: false, reason: 'unknown-message' });

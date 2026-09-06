@@ -1,8 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
 import { configStore } from '../../src/adapters/configStore';
 import { db } from '../../src/adapters/db';
+import { lookupCatalog } from '../../src/core/siteCatalog';
+import { parsePattern } from '../../src/core/urlMatch';
 import type { Category, Rule, Settings, StudyTarget } from '../../src/core/types';
 import { TEMPLATE_PACKS } from '../../src/shared/defaults';
+
+/** 目录命中的组徽章文本（识别而非回忆，启发式 #6） */
+function groupOf(pattern: string): string | null {
+  try {
+    const host = parsePattern(pattern)?.host;
+    return host ? (lookupCatalog(host)?.group ?? null) : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Options 管理页：规则/类别/学习目标/设置 CRUD + 模板导入 + 隐身引导 + 数据管理 */
 export function OptionsApp() {
@@ -163,6 +175,9 @@ export function OptionsApp() {
                     value={r.name}
                     onChange={(e) => setRules(rules.map((x) => (x.id === r.id ? { ...x, name: e.target.value } : x)))}
                   />
+                  {groupOf(r.pattern) && (
+                    <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>目录组：{groupOf(r.pattern)}</div>
+                  )}
                 </td>
                 <td>
                   <input

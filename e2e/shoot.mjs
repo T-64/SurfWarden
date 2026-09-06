@@ -78,7 +78,9 @@ async function seedDemoData() {
 }
 
 const shots = [
-  { file: `${PREFIX}popup.png`, url: `chrome-extension://${extensionId}/popup.html`, w: 380, h: 720 },
+  // ?demo=1：popup 的演示钩子（正常工具栏弹窗无 query）——截图环境中 popup 是标签页而非覆盖层，
+  // active tab 会变成 popup 自己导致 current 为空，demo 参数补上真实使用时的观感
+  { file: `${PREFIX}popup.png`, url: `chrome-extension://${extensionId}/popup.html?demo=1`, w: 380, h: 720 },
   {
     file: `${PREFIX}guide.png`,
     url: `chrome-extension://${extensionId}/guide.html?cat=entertainment&url=${encodeURIComponent('https://twitter.com/')}`,

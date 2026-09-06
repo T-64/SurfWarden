@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { configStore } from '../../src/adapters/configStore';
 import { todayKey, usageForDate } from '../../src/adapters/db';
 import { budgetState, usageByCategory } from '../../src/core/budget';
+import { suggestForHost } from '../../src/core/siteCatalog';
 import type { Category, Settings, UsageRow } from '../../src/core/types';
 import { formatClock, formatDuration } from '../../src/shared/format';
 import '../../src/shared/theme.css';
@@ -10,6 +11,7 @@ interface CurrentInfo {
   url: string;
   host: string;
   categoryId: string;
+  ruleId?: string;
   startedAt: number;
   incognito: boolean;
 }
@@ -28,11 +30,23 @@ async function loadData(): Promise<PopupData> {
     usageForDate(todayKey(settings.dayCutoffHour)),
   ]);
   const res = await chrome.runtime.sendMessage({ type: 'sw-get-state' });
+  let current = (res?.current as CurrentInfo | null) ?? null;
+  // 演示钩子（?demo=1，仅截图/开发用）：模拟"正在浏览未分类站点"
+  const demo = new URLSearchParams(location.search).has('demo');
+  if (!current && demo) {
+    current = {
+      url: 'https://www.zhihu.com/hot',
+      host: 'www.zhihu.com',
+      categoryId: 'neutral',
+      startedAt: Date.now() - 90_000,
+      incognito: false,
+    };
+  }
   return {
     cats,
     rows: [...rows].sort((a, b) => b.seconds - a.seconds),
     settings,
-    current: (res?.current as CurrentInfo | null) ?? null,
+    current,
   };
 }
 
@@ -42,6 +56,7 @@ const C = 2 * Math.PI * R;
 export function App() {
   const [data, setData] = useState<PopupData | null>(null);
   const [busy, setBusy] = useState(false);
+  const [ignored, setIgnored] = useState<Set<string>>(new Set());
 
   const refresh = useCallback(() => {
     void loadData().then(setData);
@@ -66,6 +81,24 @@ export function App() {
   const present = cats.filter((c) => (used.get(c.id) ?? 0) > 0);
   const paused = settings.pauseUntil !== undefined && Date.now() < settings.pauseUntil;
   const curCat = current ? cats.find((c) => c.id === current.categoryId) : undefined;
+  // 站点情报（ADR-0011）：未分类 + 目录可匹配 → 建议卡
+  const suggestion =
+    current && current.ruleId === undefined && !ignored.has(current.host)
+      ? suggestForHost(current.host)
+      : null;
+
+  async function adoptSuggestion(): Promise<void> {
+    if (!current || !suggestion) return;
+    setBusy(true);
+    await chrome.runtime.sendMessage({
+      type: 'sw-add-rule',
+      name: suggestion.name,
+      pattern: suggestion.pattern,
+      category: suggestion.category,
+    });
+    refresh();
+    setBusy(false);
+  }
 
   async function reclassify(categoryId: string): Promise<void> {
     setBusy(true);
@@ -133,6 +166,25 @@ export function App() {
             {current.categoryId !== 'entertainment' && (
               <button className="od-btn-mini" disabled={busy} onClick={() => void reclassify('entertainment')}>🎮 记为娱乐</button>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 站点情报建议卡（ADR-0011） */}
+      {suggestion && (
+        <div className="od-card-raised" style={{ padding: '9px 12px', marginBottom: 12 }}>
+          <div className="od-caption" style={{ marginBottom: 6 }}>⚡ 未分类站点</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+            <span className="od-key"><span className="k-dot" style={{ background: 'var(--amber)' }} />{suggestion.group}</span>
+            <span style={{ fontSize: 12, color: 'var(--body)' }}>{suggestion.name} → {cats.find((c) => c.id === suggestion.category)?.name ?? suggestion.category}</span>
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className="od-btn-mini" disabled={busy} style={{ color: 'var(--green)' }} onClick={() => void adoptSuggestion()}>
+              ✓ 采纳为规则
+            </button>
+            <button className="od-btn-mini" onClick={() => setIgnored(new Set(ignored).add(current!.host))}>
+              忽略
+            </button>
           </div>
         </div>
       )}
@@ -222,7 +274,7 @@ export function App() {
         ) : (
           <button className="od-btn-mini" disabled={busy} onClick={() => void pause30()}>暂停监督 30′</button>
         )}
-        <span className="od-caption" style={{ letterSpacing: 0 }}>v0.4 · LOCAL ONLY</span>
+        <span className="od-caption" style={{ letterSpacing: 0 }}>v{chrome.runtime.getManifest().version} · LOCAL ONLY</span>
       </div>
     </div>
   );
