@@ -15,7 +15,8 @@
     "smoke": "node e2e/smoke.mjs",
     "e2e:block": "node e2e/blocking.mjs",
     "e2e:options": "node e2e/options.mjs",
-    "check:privacy": "node scripts/check-no-net.mjs"
+    "check:privacy": "node scripts/check-no-net.mjs",
+    "shots": "node e2e/shoot.mjs"
   },
   "dependencies": {
     "dexie": "^4.4.5",
