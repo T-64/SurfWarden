@@ -1,10 +1,14 @@
-import type { ClassifyResult, Rule } from './types';
+import type { CategoryId, Rule } from './types';
 
 /**
- * 规则匹配（纯函数）——语法与优先级见 docs/design/key-algorithms.md §2。
- *
- * v0.1 支持 exact / path / domain 三种形态；wildcard / regex 的 score 槽位
- * 已预留（v0.2 U1 补全语义）。解析失败的 pattern 静默跳过（写入 options 页后不会出现）。
+ * 网址规则匹配（纯函数）。语法：
+ *   twitter.com            domain：该域及全部子域
+ *   bilibili.com/video/*   path：域名 + 路径前缀
+ *   *.twitch.tv/*          wildcard：任意子域 + 路径前缀
+ *   https://a.com/x        exact：完整 URL（忽略 #hash）
+ *   re:^https://…          regex：大小写不敏感
+ * 优先级 exact > path > regex > domain > wildcard，同分按创建先后。非法 pattern 静默跳过
+ * （options 页保存前用 parsePattern 校验）。
  */
 
 export type PatternKind = 'exact' | 'regex' | 'path' | 'wildcard' | 'domain';
@@ -19,7 +23,7 @@ const SCORE: Record<PatternKind, number> = {
 
 export interface CompiledRule {
   id: string;
-  category: string;
+  category: CategoryId;
   kind: PatternKind;
   score: number;
   /** 编译时的创建序，同分打破平局 */
@@ -101,7 +105,6 @@ export function compileRules(rules: Rule[]): CompiledRule[] {
   const out: CompiledRule[] = [];
   const sorted = [...rules].sort((a, b) => a.createdAt - b.createdAt);
   for (const r of sorted) {
-    if (!r.enabled) continue;
     const parsed = parsePattern(r.pattern);
     if (!parsed) continue;
     out.push({ id: r.id, category: r.category, order: out.length, ...parsed });
@@ -109,8 +112,13 @@ export function compileRules(rules: Rule[]): CompiledRule[] {
   return out.sort((a, b) => b.score - a.score || a.order - b.order);
 }
 
-/** 首个命中生效；无命中返回 null（由调用方落默认类别）。非 http(s) 一律 null */
-export function matchUrl(compiled: CompiledRule[], href: string): ClassifyResult | null {
+export interface RuleHit {
+  category: CategoryId;
+  ruleId: string;
+}
+
+/** 首个命中生效；无命中或非 http(s) 返回 null */
+export function matchUrl(compiled: CompiledRule[], href: string): RuleHit | null {
   let u: URL;
   try {
     u = new URL(href);
@@ -123,41 +131,18 @@ export function matchUrl(compiled: CompiledRule[], href: string): ClassifyResult
 
   for (const r of compiled) {
     if (r.kind === 'exact') {
-      if (full === r.exactUrl) return { categoryId: r.category, ruleId: r.id };
+      if (full === r.exactUrl) return { category: r.category, ruleId: r.id };
       continue;
     }
     if (r.kind === 'regex') {
-      if (r.regex!.test(href)) return { categoryId: r.category, ruleId: r.id };
+      if (r.regex!.test(href)) return { category: r.category, ruleId: r.id };
       continue;
     }
     if (!hostMatches(host, r)) continue;
     if (r.kind === 'path' || r.kind === 'wildcard') {
       if (!u.pathname.toLowerCase().startsWith(r.pathPrefix ?? '/')) continue;
     }
-    return { categoryId: r.category, ruleId: r.id };
-  }
-  return null;
-}
-
-/**
- * 组合语义（key-algorithms §2.2）：规则无命中时，http(s) 落默认类别，
- * 其余协议（chrome://、chrome-extension://、file: 等）不可追踪返回 null。
- * 这是 background deps.classify 的唯一正确实现，避免两类 null 混淆。
- */
-export function matchUrlOrDefault(
-  compiled: CompiledRule[],
-  href: string,
-  defaultCategoryId: string,
-): ClassifyResult | null {
-  const hit = matchUrl(compiled, href);
-  if (hit) return hit;
-  try {
-    const u = new URL(href);
-    if (u.protocol === 'http:' || u.protocol === 'https:') {
-      return { categoryId: defaultCategoryId };
-    }
-  } catch {
-    // 不可解析的 URL 不可追踪
+    return { category: r.category, ruleId: r.id };
   }
   return null;
 }
