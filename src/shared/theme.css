@@ -38,6 +38,8 @@
 
 /* ---------- 基座 ---------- */
 
+.od-app, .od-app *, .od-app *::before, .od-app *::after { box-sizing: border-box; }
+
 .od-app {
   background: var(--canvas);
   color: var(--body);

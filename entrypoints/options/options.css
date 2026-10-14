@@ -10,7 +10,9 @@
 .field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--mute); }
 .label { margin: 6px 0 0; font-size: 12px; color: var(--mute); }
 .line { display: flex; gap: 8px; align-items: center; }
+.line .od-input { flex: 1; width: auto; min-width: 0; }
 .line .narrow { width: 160px; flex: none; }
+.opt button { white-space: nowrap; }
 .checks { display: flex; gap: 18px; font-size: 13px; }
 .checks input { margin-right: 6px; accent-color: var(--green); }
 .od-input:disabled { opacity: 0.5; }
@@ -19,8 +21,8 @@
 .mono { font-family: var(--mono); font-size: 12px; }
 .faint { color: var(--faint); }
 textarea.od-input { resize: vertical; font-family: var(--mono); font-size: 12px; }
-.savebar { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 140%); transition: transform 0.2s;
+.savebar { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 140%); transition: transform 0.2s, opacity 0.2s; opacity: 0; visibility: hidden;
   display: flex; gap: 10px; align-items: center; padding: 10px 12px 10px 18px; border-radius: 12px;
   background: var(--card); border: 1px solid var(--line); color: var(--ink); font-size: 13px; }
-.savebar.show { transform: translate(-50%, 0); }
+.savebar.show { transform: translate(-50%, 0); opacity: 1; visibility: visible; }
 @media (max-width: 640px) { .opt { padding: 20px 16px 96px; } .line { flex-wrap: wrap; } }

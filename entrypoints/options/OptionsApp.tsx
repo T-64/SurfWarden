@@ -173,7 +173,7 @@ export function OptionsApp() {
         <Field label="额外放行的站点（每行一个域名，含子域）">
           <textarea
             className="od-input"
-            rows={5}
+            rows={8}
             disabled={locked}
             defaultValue={s.curfewAllow.hosts.join('\n')}
             onChange={(e) => set({ curfewAllow: { ...s.curfewAllow, hosts: e.target.value.split('\n').map((x) => x.trim()).filter(Boolean) } })}
