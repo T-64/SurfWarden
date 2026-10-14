@@ -1,88 +1,129 @@
-# 架构设计（Architecture）
+# 架构设计 v3
 
-> 版本基线 v0.1（2026-09-06）。变更需在文末"变更记录"追加，重要取舍另立 ADR。
+> 基线 2026-10-14，对应 PRODUCT.md v3。以后的偏差在文末"变更记录"里追加。
 
-## 1. 总览
-
-SurfWarden = 浏览器扩展（Chrome MV3 优先），单机单用户，全本地。
+## 1. 分层
 
 ```
-┌─────────────────────────── 浏览器进程边界 ───────────────────────────┐
-│                                                                      │
-│  Service Worker (background)                    扩展页面              │
-│  ┌─────────────────────────────┐      ┌────────────────────────┐    │
-│  │ trackerHost   事件接线/状态机 │      │ popup    今日概览/改判   │    │
-│  │ ruleEngine     URL→类别      │      │ guide    引导页 (v0.2)  │    │
-│  │ budgetHost    预算/豁免/日切  │      │ options  规则管理 (v0.3)│    │
-│  │ blocker       DNR 动态规则   │      └───────────┬────────────┘    │
-│  └───────┬─────────────────────┘                  │                 │
-│          │        共享存储                          │                 │
-│  ┌───────┴──────────────────────────────────────────┴────────────┐   │
-│  │ chrome.storage.local（配置） + IndexedDB/Dexie（明细与聚合）      │   │
-│  └───────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│  content scripts: nudge 横幅 (v0.2) / intent 打卡 (P1)               │
-└──────────────────────────────────────────────────────────────────────┘
+src/core/       纯逻辑：types / tracker / classify / urlMatch / policy / schedule / metrics —— 禁止 import chrome
+src/adapters/   chrome.* 与 Dexie 的薄封装：events / db / config / runtime —— 只做 IO
+src/shared/     defaults / datetime / format / theme.css
+entrypoints/
+  background.ts        SW：事件 → tracker；消息 → policy；闹钟；徽章
+  gate.content.ts      页面内遮罩（闸门 / 拦截 / 倒计时）+ 频道信号 + 媒体状态
+  popup/ options/ report/
 ```
 
-- 计时/预算/封锁的唯一权威在 Service Worker；扩展页面只读写存储，不重复维护状态。
-- 扩展页面与 SW 共享同一 IndexedDB（同 extension origin），popup 直接查询，避免长消息协议。
-
-## 2. 分层与目录
-
-遵守 dev-process.md §2 的三层约束：
+## 2. 数据流
 
 ```
-surfwarden/
-├── entrypoints/            # WXT 入口层（组装，不含算法）
-│   ├── background.ts       # SW：事件接线 → core.step → adapters 写入
-│   ├── popup/              # index.html + main.tsx + App.tsx
-│   ├── guide/              # (v0.2) 引导页
-│   └── options/            # (v0.3) 设置页
-├── src/
-│   ├── core/               # 纯逻辑层（无 chrome 依赖，vitest 主战场）
-│   │   ├── types.ts        # 全部领域类型
-│   │   ├── tracker.ts      # 计时状态机 step()
-│   │   ├── urlMatch.ts     # 规则编译与匹配
-│   │   └── budget.ts       # 预算状态计算、日界
-│   ├── adapters/
-│   │   ├── chromeEvents.ts # tabs/windows/idle/alarms 事件 → TrackerEvent
-│   │   ├── db.ts           # Dexie schema 与查询
-│   │   ├── configStore.ts  # chrome.storage 读写（规则/类别/设置/学习目标）
-│   │   └── dnr.ts          # declarativeNetRequest 动态规则封装
-│   └── shared/
-│       ├── defaults.ts     # 默认类别/设置/模板包
-│       └── datetime.ts     # dateKey(cutoff)、跨天判断（纯函数）
-├── docs/
-└── wxt.config.ts
+chrome 事件 ─┐
+content 信号 ─┼→ adapters/events → TrackerEvent → core/tracker.step() → pieces → adapters/db（upsert）
+心跳 30s ────┘                                                ↑ classify(url, channel)
+content 请求判决 → SW: classify + 读 usage/passes/schedule → core/policy.decide() → Verdict → content 渲染
+SW 状态变化（通行证到期 / 时段切换 / 配置变化 / 额度用完）→ 广播 'policy-changed' → content 重新请求判决
 ```
 
-## 3. 进程与数据流
+- **判决的唯一权威在 SW。** content 只负责渲染；popup、报告页、设置页只读写存储。
+- content 每 30 秒自己轮询一次判决，作为广播丢失时的兜底。
 
-**计时流**：Chrome 事件 → `adapters/chromeEvents` 归一化为 `TrackerEvent` → `core/tracker.step(state, event, deps)` 返回新状态 + 被关闭的 `Segment` → adapter 把 Segment 写入 Dexie（sessions 明细 + usage_daily 聚合）→ 新状态存 `chrome.storage.session`。
+## 3. 计时（ADR-0014）
 
-**改判流**（popup 一键改判，v0.2）：popup 计算出目标会话段 → 直接更新 Dexie 对应 SessionRow.categoryId 并重算该日聚合 → SW 下一次读取时以存储为准，无缓存冲突（SW 不缓存聚合）。
+### 3.1 对账模型
 
-**封锁流**（v0.2）：budgetHost 检测到预算耗尽 → `dnr.addRedirectRules(category)` → 命中 `main_frame` 重定向到 `/guide.html?url=<原始URL>` → 引导页读 query 展示统计与动作（豁免/去学习）。
+`step(state, event, deps)` 分两步：
 
-## 4. Manifest 与权限（v0.1 基线）
+1. **记账。** 更新窗口和标签页簿记，以及每个标签页的 `audible`、`mediaPlaying`、`channel`。有正向活动证据时，前移水位 `lastActiveAt`。
+2. **对账。** 先算出"现在应该计时的目标"`desired`：
 
-| 权限 | 用途 |
-|------|------|
-| `tabs` | 读取 active tab 的 url/title 用于分类与统计 |
-| `idle` | 系统级发呆/锁屏检测 |
-| `alarms` | 心跳水位、预算日切、豁免倒计时 |
-| `storage` | chrome.storage（配置 + session 水位） |
-| `declarativeNetRequest` | (v0.2) 动态重定向规则 |
-| host `<all_urls>` | DNR redirect 需要对目标 host 的权限；tabs 读取 URL |
+   ```
+   desired = 聚焦窗口的 active tab，满足：
+     url 是 http(s)
+     ∧ idleState ≠ locked
+     ∧ (idleState = active ∨ tab.audible ∨ tab.mediaPlaying)
+   ```
 
-隐私红线（PRODUCT.md G4）：除上述浏览器 API 外**零网络请求**；CI 中用 `grep -rE "fetch\(|XMLHttpRequest|WebSocket" src/ entrypoints/` 抽查（adapters/db 除外说明）。
+   再拿 `desired` 和当前段比较：
+   - 标签页、URL 或分类有任何不同 → 关闭当前段。
+   - 需要计时但当前没有段 → 开新段。
+   - 只有标题变化 → 原地更新，不切段。
 
-## 5. 技术栈（ADR-0001/0002）
+### 3.2 关段时间（只取证据能支持的部分）
 
-- WXT + TypeScript + React（popup/guide/options UI）+ Dexie
-- 测试：vitest（core 全覆盖）+ Playwright（v0.2 起 E2E 冒烟）
+```
+end = min(事件时刻, lastActiveAt + idleGrace)
+若因系统 idle 关段：end = min(end, 事件时刻 − idleThreshold)   // idle 事件滞后一个阈值
+end = max(end, pieceStart)
+```
 
-## 6. 变更记录
+### 3.3 片段落库
 
-- 2026-09-06 v0.1：初稿，按 PRODUCT.md 落地分层与目录。
+- 每次心跳，如果距上次水位在宽限之内，就把 `[pieceStart, now]` 作为一个**片段**落库，再令 `pieceStart = now`。
+- 如果心跳间隔超出宽限（SW 被杀，或系统休眠），按水位截断关段，然后重新开段。
+- 片段带 `segId`。数据库里 `sessions` 以 `segId|date` 为键做 upsert，所以同一段只占一行，跨过逻辑日的会拆成两行。
+
+## 4. 分类
+
+`classify(url, channel?, override?)`，优先级为 override > 频道规则 > 网址规则 > `other`。不是 http(s) 的 URL 返回 null，即不追踪。
+
+频道信号 `{platform: 'bilibili' | 'youtube', id, name}` 由 content 从 DOM 中提取：
+
+- B 站视频页：UP 主链接 `space.bilibili.com/<mid>`，加上 `meta[name=author]`。
+- YouTube watch 页：owner 区域的 `/@handle` 链接。
+
+## 5. 策略（core/policy.ts）
+
+`phaseAt(ts, schedule)` 返回 `day | winddown | curfew`。
+
+`decide(input) → Verdict`，判决表如下：
+
+| 时段 | 类别 | 条件 | 判决 |
+|------|------|------|------|
+| curfew | drift | — | block:curfew（不可延长） |
+| curfew | 白名单（类别或 host） | — | allow + 横幅 late |
+| curfew | 其他 | 延长有效 | allow + 横幅 ext |
+| curfew | 其他 | — | block:curfew（今晚剩余次数 > 0 时可延长） |
+| winddown | drift | — | block:winddown |
+| winddown | 非 drift | — | allow + 横幅 winddown |
+| day | drift | 通行证有效 ∧ 未封顶 | allow + 横幅 pass |
+| day | drift | 封顶 | block:cap |
+| day | drift | 通行证刚过期（与 `expiredPass` 同站） | block:expired（可以再申请） |
+| day | drift | 无通行证 | gate（`waitSec` 按当天次数递增，时长档位不超过剩余额度） |
+| day | 非 drift | — | allow |
+
+`grantPass` 的校验也放在 core 里：必须是白天、在额度以内、档位合法、已经等够了时间。
+
+## 6. 数据模型
+
+**chrome.storage.local（配置）：**
+
+```
+settings  { schedule{windDown,bedtime,wake: 分钟数}, germanGoalMin, driftCapMin, passOptionsMin[],
+            curfewAllow{categories[], hosts[]}, curfewExtMin, curfewExtPerNight,
+            idleThresholdSec, idleGraceSec, dayCutoffHour }
+rules     Rule[] { id, pattern, category, name?, createdAt }
+channels  ChannelRule[] { platform, id, name, category }
+targets   GermanTarget[] { id, name, url }
+lastGerman { url, title, at }          // SW 在德语片段落库时更新
+```
+
+**chrome.storage.session（运行态，跨 SW 重启保留）：** `tracker` 快照、`passes {site → Pass}`、`expired {site → 时间戳}`、`curfewExt {until}`、`gateShown {tabId → 时间戳}`。
+
+**IndexedDB（SurfWardenV3）：**
+
+```
+sessions   'id'(segId|date), date, start      明细，保留 90 天
+usage      [date+category+host]               聚合秒数（永久保留）
+days       'date' → { firstAt, lastAt }       每日首次和最后活动时间（作息报告用，永久保留）
+events     ++id, date                         pass / curfew-ext / go-german / mark-channel 日志
+```
+
+不变量：`usage` 等于 `sessions` 之和（同一个事务里写入）。`days.lastAt` 等于当日片段的最大 end。
+
+## 7. 权限
+
+`tabs`、`idle`、`alarms`、`storage`、`scripting`（安装或更新时给已打开的标签页补注入 content），以及 host `<all_urls>`。去掉了 `declarativeNetRequest`。
+
+## 8. 变更记录
+
+- 2026-10-14 v3 初稿。
