@@ -51,3 +51,30 @@ export function splitByDay(start: number, end: number, cutoffHour: number): DayP
   }
   return out;
 }
+
+/** 'YYYY-MM-DD' 加减 n 个日历日（DST 安全） */
+export function addDays(date: string, n: number): string {
+  const [y, m, d] = date.split('-').map(Number) as [number, number, number];
+  const t = new Date(y, m - 1, d + n);
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+}
+
+/** 逻辑日 date 的本地时刻 minute（minute < cutoff 时落在次日凌晨） */
+export function logicalDayAt(date: string, minute: number, cutoffHour: number): number {
+  const [y, m, d] = date.split('-').map(Number) as [number, number, number];
+  const extra = minute < cutoffHour * 60 ? 1 : 0;
+  return new Date(y, m - 1, d + extra, Math.floor(minute / 60), minute % 60, 0, 0).getTime();
+}
+
+/** 逻辑日的 [起, 止) 时间戳 */
+export function dayRange(date: string, cutoffHour: number): [number, number] {
+  const [y, m, d] = date.split('-').map(Number) as [number, number, number];
+  return [new Date(y, m - 1, d, cutoffHour).getTime(), new Date(y, m - 1, d + 1, cutoffHour).getTime()];
+}
+
+/** 截至 today 的最近 n 个逻辑日（旧→新） */
+export function lastNDates(today: string, n: number): string[] {
+  const out: string[] = [];
+  for (let i = n - 1; i >= 0; i--) out.push(addDays(today, -i));
+  return out;
+}

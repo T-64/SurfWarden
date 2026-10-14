@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client';
-import { GuideApp } from './GuideApp';
+import { ReportApp } from './ReportApp';
 
 const root = document.getElementById('root');
-if (root) createRoot(root).render(<GuideApp />);
+if (root) createRoot(root).render(<ReportApp />);

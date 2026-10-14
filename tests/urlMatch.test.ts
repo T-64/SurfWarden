@@ -1,18 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { compileRules, matchUrl, matchUrlOrDefault, parsePattern } from '../src/core/urlMatch';
-import type { Rule } from '../src/core/types';
+import { compileRules, matchUrl, parsePattern } from '../src/core/urlMatch';
+import type { CategoryId, Rule } from '../src/core/types';
 
 let seq = 0;
-function rule(pattern: string, category = 'entertainment', overrides: Partial<Rule> = {}): Rule {
-  return {
-    id: `r${++seq}`,
-    name: pattern,
-    pattern,
-    category,
-    enabled: true,
-    createdAt: seq,
-    ...overrides,
-  };
+function rule(pattern: string, category: CategoryId = 'drift'): Rule {
+  return { id: `r${++seq}`, pattern, category, createdAt: seq };
 }
 
 describe('parsePattern 形态识别', () => {
@@ -43,21 +35,21 @@ describe('parsePattern 形态识别', () => {
 describe('matchUrl', () => {
   const compiled = compileRules([
     rule('twitter.com'),
-    rule('live.bilibili.com', 'entertainment'),
-    rule('bilibili.com/video/*', 'learning'),
-    rule('coursera.org', 'learning'),
+    rule('live.bilibili.com', 'drift'),
+    rule('bilibili.com/video/*', 'german'),
+    rule('coursera.org', 'german'),
   ]);
 
-  const match = (url: string) => matchUrl(compiled, url)?.categoryId ?? null;
+  const match = (url: string) => matchUrl(compiled, url)?.category ?? null;
 
   it('domain：命中域名及全部子域', () => {
-    expect(match('https://twitter.com/home')).toBe('entertainment');
-    expect(match('https://www.twitter.com/home')).toBe('entertainment');
+    expect(match('https://twitter.com/home')).toBe('drift');
+    expect(match('https://www.twitter.com/home')).toBe('drift');
   });
 
   it('path：更具体的规则赢——B 站视频记学习、直播记娱乐（PRODUCT.md 核心场景）', () => {
-    expect(match('https://www.bilibili.com/video/BV1xx?p=1')).toBe('learning');
-    expect(match('https://live.bilibili.com/12345')).toBe('entertainment');
+    expect(match('https://www.bilibili.com/video/BV1xx?p=1')).toBe('german');
+    expect(match('https://live.bilibili.com/12345')).toBe('drift');
     expect(match('https://www.bilibili.com/')).toBeNull();
   });
 
@@ -69,8 +61,8 @@ describe('matchUrl', () => {
   });
 
   it('hash 不影响 exact 匹配；大小写不敏感', () => {
-    const c = compileRules([rule('https://a.com/watch?v=1', 'learning')]);
-    expect(matchUrl(c, 'https://A.com/watch?v=1#comments')?.categoryId).toBe('learning');
+    const c = compileRules([rule('https://a.com/watch?v=1', 'german')]);
+    expect(matchUrl(c, 'https://A.com/watch?v=1#comments')?.category).toBe('german');
   });
 
   it('无命中返回 null（默认类别由调用方决定）', () => {
@@ -81,66 +73,43 @@ describe('matchUrl', () => {
 describe('优先级：specificity 降序，同分按创建先后（ADR 设计 §2.2）', () => {
   it('path(8) > domain(4)，与规则顺序无关', () => {
     const c = compileRules([
-      rule('bilibili.com', 'entertainment'), // 先创建，分低
-      rule('bilibili.com/video/*', 'learning'), // 后创建，分高
+      rule('bilibili.com', 'drift'), // 先创建，分低
+      rule('bilibili.com/video/*', 'german'), // 后创建，分高
     ]);
-    expect(matchUrl(c, 'https://bilibili.com/video/BV1')?.categoryId).toBe('learning');
-    expect(matchUrl(c, 'https://bilibili.com/')?.categoryId).toBe('entertainment');
+    expect(matchUrl(c, 'https://bilibili.com/video/BV1')?.category).toBe('german');
+    expect(matchUrl(c, 'https://bilibili.com/')?.category).toBe('drift');
   });
 
   it('exact(10) 最高；同分（同形态）按 createdAt 升序', () => {
     const c = compileRules([
-      rule('bilibili.com/video/*', 'a'),
-      rule('bilibili.com/video/*', 'b'), // 同分，后创建，不赢
-      rule('https://bilibili.com/video/BVexact', 'exact-cat'),
+      rule('bilibili.com/video/*', 'german'),
+      rule('bilibili.com/video/*', 'study'), // 同分，后创建，不赢
+      rule('https://bilibili.com/video/BVexact', 'other'),
     ]);
-    expect(matchUrl(c, 'https://bilibili.com/video/BVexact')?.categoryId).toBe('exact-cat');
-    expect(matchUrl(c, 'https://bilibili.com/video/BVother')?.categoryId).toBe('a');
+    expect(matchUrl(c, 'https://bilibili.com/video/BVexact')?.category).toBe('other');
+    expect(matchUrl(c, 'https://bilibili.com/video/BVother')?.category).toBe('german');
   });
 
-  it('禁用规则被剔除；非法 pattern 不参与', () => {
+  it('非法 pattern 不参与', () => {
     const c = compileRules([
-      rule('twitter.com', 'entertainment', { enabled: false }),
-      rule('bad ** pattern', 'entertainment'),
-      rule('github.com', 'work'),
+      rule('bad ** pattern', 'drift'),
+      rule('github.com', 'study'),
     ]);
-    expect(matchUrl(c, 'https://twitter.com/')).toBeNull();
-    expect(matchUrl(c, 'https://github.com/')?.categoryId).toBe('work');
+    expect(matchUrl(c, 'https://github.com/')?.category).toBe('study');
   });
 });
 
-describe('matchUrlOrDefault：background classify 的唯一正确语义', () => {
-  const compiled = compileRules([rule('twitter.com', 'entertainment')]);
-  const classify = (url: string) => matchUrlOrDefault(compiled, url, 'neutral');
-
-  it('命中规则 → 规则类别', () => {
-    expect(classify('https://twitter.com/x')?.categoryId).toBe('entertainment');
-  });
-
-  it('无命中 + http(s) → 默认类别（E2E 冒烟发现的缺口：否则未知站点永不计时）', () => {
-    expect(classify('https://example.com/')?.categoryId).toBe('neutral');
-    expect(classify('https://example.com/')?.ruleId).toBeUndefined();
-  });
-
-  it('非 http(s) → null（不可追踪，不能落默认类别）', () => {
-    expect(classify('chrome://newtab')).toBeNull();
-    expect(classify('chrome-extension://abc/popup.html')).toBeNull();
-    expect(classify('about:blank')).toBeNull();
-    expect(classify('')).toBeNull();
-  });
-});
-
-describe('wildcard / regex 槽位（v0.2 完成语义前的基本行为）', () => {
+describe('wildcard / regex', () => {
   it('wildcard：host 侧接受子域，path 侧按前缀', () => {
     const c = compileRules([rule('*.twitch.tv/*')]);
-    expect(matchUrl(c, 'https://www.twitch.tv/apex')?.categoryId).toBe('entertainment');
-    expect(matchUrl(c, 'https://twitch.tv/')?.categoryId).toBe('entertainment');
+    expect(matchUrl(c, 'https://www.twitch.tv/apex')?.category).toBe('drift');
+    expect(matchUrl(c, 'https://twitch.tv/')?.category).toBe('drift');
     expect(matchUrl(c, 'https://twitch.tv.example.com/')).toBeNull(); // 后缀拼接伪造的域不命中
   });
 
   it('regex：对完整 href 做大小写不敏感匹配', () => {
-    const c = compileRules([rule('re:apex|predator', 'entertainment')]);
-    expect(matchUrl(c, 'https://example.com/APEX-highlights')?.categoryId).toBe('entertainment');
+    const c = compileRules([rule('re:apex|predator', 'drift')]);
+    expect(matchUrl(c, 'https://example.com/APEX-highlights')?.category).toBe('drift');
     expect(matchUrl(c, 'https://example.com/valorant')).toBeNull();
   });
 });

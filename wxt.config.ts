@@ -5,12 +5,9 @@ export default defineConfig({
   manifest: {
     name: 'SurfWarden',
     short_name: 'SurfWarden',
-    description: '本地优先的网页时间统计与监督：分用途记录，而不是域名一刀切。',
-    permissions: ['tabs', 'idle', 'alarms', 'storage', 'declarativeNetRequest'],
+    description: '按时下线，把刷 B 站和 X 的时间换成学德语。全部数据只在本机。',
+    // scripting：安装/更新后给已打开的标签页补注入遮罩脚本（ADR-0013）
+    permissions: ['tabs', 'idle', 'alarms', 'storage', 'scripting'],
     host_permissions: ['<all_urls>'],
-    // DNR 重定向到引导页的前提（references.md §3）
-    web_accessible_resources: [
-      { resources: ['guide.html'], matches: ['<all_urls>'] },
-    ],
   },
 });

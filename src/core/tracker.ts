@@ -1,8 +1,10 @@
 import { splitByDay } from '../shared/datetime';
+import { hostOf, isTrackable } from './classify';
 import type {
   ActiveSegment,
-  ClosedSegment,
-  EndReason,
+  ClassifyResult,
+  PageInfo,
+  Piece,
   StepResult,
   TabInfo,
   TrackerDeps,
@@ -11,212 +13,212 @@ import type {
 } from './types';
 
 /**
- * 计时状态机（纯函数）——语义见 docs/design/key-algorithms.md §1 与 ADR-0003。
+ * 计时状态机（纯函数，ADR-0014 对账模型）。
  *
- * 时间语义两条铁律：
- * 1. 关段时 end = min(事件时刻, 水位 + 宽限)——水位是"用户活跃的最后正证据"，
- *    SW 被杀/系统休眠留下的空窗不允许被计入。
- * 2. 心跳只在"当前在计时且距水位足够近"时前移水位；跳档心跳（休眠醒来）
- *    视为证据断裂：先按水位截断关段，再重开新段（误差 ≤ idle 阈值 + 宽限）。
+ * 每个事件只做两件事：① 记账（簿记 + 活动水位）；② 对账——算出"此刻应计时的目标"，
+ * 与当前段比较，不同就关段、需要就开段。
+ *
+ * 时间铁律：关段 end = min(事件时刻, 水位 + 宽限)；因系统 idle 关段再回溯一个阈值。
+ * 水位 = 最后一次有正证据的活动时刻；SW 被杀 / 系统休眠的空窗永远不计入。
  */
 
-/** 心跳允许的调度抖动：正常间隔 30s，宽限 60–90s，叠加抖动后不会误判 */
+/** 心跳调度抖动容忍：正常 30s 间隔，宽限 60s，叠加抖动不误判 */
 const HB_JITTER_MS = 15_000;
 
 export function initialState(): TrackerState {
   return {
     focusedWindowId: null,
     activeTabs: {},
-    current: null,
+    pages: {},
+    override: null,
+    idleState: 'active',
     lastActiveAt: 0,
-    idleState: 'active', // 乐观初值，sync 事件会用真实 idle 状态纠正
+    current: null,
   };
 }
 
-function hostOf(url: string): string | null {
-  try {
-    return new URL(url).hostname || null;
-  } catch {
-    return null;
+export function step(prev: TrackerState, ev: TrackerEvent, deps: TrackerDeps): StepResult {
+  const s = structuredClone(prev);
+  const pieces: Piece[] = [];
+  const graceMs = deps.idleGraceSec * 1000;
+  let idleClose = false;
+
+  // ⓪ 证据断档（SW 被杀 / 系统休眠后的第一个事件，不论类型）：先按水位截断，
+  // 否则唤醒后的 idle→active 等事件会前移水位，把空窗算进当前段
+  if (s.current && ev.at - s.lastActiveAt > graceMs + HB_JITTER_MS) {
+    pieces.push(...closeCurrent(s, ev.at, false, deps));
   }
+
+  // ① 记账
+  switch (ev.type) {
+    case 'tab-activated':
+      s.focusedWindowId = ev.windowId;
+      s.activeTabs[ev.windowId] = tabInfo(ev);
+      touch(s, ev.at);
+      break;
+    case 'tab-updated':
+      s.activeTabs[ev.windowId] = tabInfo(ev);
+      if (ev.windowId === s.focusedWindowId) touch(s, ev.at);
+      break;
+    case 'tab-removed':
+      for (const [wid, t] of Object.entries(s.activeTabs)) {
+        if (t.tabId === ev.tabId) delete s.activeTabs[Number(wid)];
+      }
+      delete s.pages[ev.tabId];
+      if (s.override?.tabId === ev.tabId) s.override = null;
+      break;
+    case 'window-focus':
+      s.focusedWindowId = ev.windowId === -1 ? null : ev.windowId;
+      if (ev.windowId !== -1) touch(s, ev.at);
+      break;
+    case 'idle-changed':
+      s.idleState = ev.state;
+      if (ev.state === 'active') touch(s, ev.at);
+      idleClose = ev.state === 'idle';
+      break;
+    case 'page': {
+      s.pages[ev.tabId] = ev.page;
+      const focused = s.focusedWindowId === null ? undefined : s.activeTabs[s.focusedWindowId];
+      if (focused?.tabId === ev.tabId) touch(s, ev.at);
+      break;
+    }
+    case 'override':
+      s.override = ev.override;
+      break;
+    case 'heartbeat':
+      // 断档已在 ⓪ 截断；连续时前移水位并落库
+      if (s.current) {
+        touch(s, ev.at);
+        pieces.push(...flush(s, ev.at, deps));
+      }
+      break;
+    case 'reclassify':
+      break;
+    case 'sync':
+      s.focusedWindowId = ev.focusedWindowId;
+      s.idleState = ev.idleState;
+      s.activeTabs = {};
+      for (const t of ev.tabs) s.activeTabs[t.windowId] = tabInfo(t);
+      // 对账不是活动证据：不前移水位（开段时 open() 自会 touch）
+      break;
+  }
+
+  // ② 对账
+  const want = desiredTab(s);
+  const cls = want ? classifyTab(s, want, deps) : null;
+  const cur = s.current;
+  if (cur) {
+    const same =
+      want !== null &&
+      cls !== null &&
+      want.tabId === cur.tabId &&
+      s.focusedWindowId === cur.windowId &&
+      want.url === cur.url &&
+      cls.category === cur.category;
+    if (same) {
+      cur.title = want.title;
+      cur.source = cls.source;
+      cur.channel = pageOf(s, want)?.channel;
+    } else {
+      pieces.push(...closeCurrent(s, ev.at, idleClose, deps));
+    }
+  }
+  if (!s.current && want && cls) open(s, want, cls, ev.at);
+
+  return { state: s, pieces };
 }
 
-function cloneState(s: TrackerState): TrackerState {
-  return {
-    focusedWindowId: s.focusedWindowId,
-    activeTabs: Object.fromEntries(
-      Object.entries(s.activeTabs).map(([k, v]) => [k as unknown as number, { ...v }]),
-    ),
-    current: s.current ? { ...s.current } : null,
-    lastActiveAt: s.lastActiveAt,
-    idleState: s.idleState,
-  };
+/** 此刻应计时的标签页：聚焦窗口的 active tab，且 (系统活跃 ∨ 有媒体证据) ∧ 未锁屏 */
+export function desiredTab(s: TrackerState): TabInfo | null {
+  if (s.focusedWindowId === null) return null;
+  const tab = s.activeTabs[s.focusedWindowId];
+  if (!tab || !isTrackable(tab.url)) return null;
+  if (s.idleState === 'locked') return null;
+  if (s.idleState === 'idle' && !(tab.audible === true || pageOf(s, tab)?.mediaPlaying === true)) return null;
+  return tab;
+}
+
+function pageOf(s: TrackerState, tab: TabInfo): PageInfo | undefined {
+  const p = s.pages[tab.tabId];
+  return p && p.url === tab.url ? p : undefined;
+}
+
+function classifyTab(s: TrackerState, tab: TabInfo, deps: TrackerDeps): ClassifyResult | null {
+  const o = s.override;
+  if (o && o.tabId === tab.tabId && o.url === tab.url) return { category: o.category, source: 'manual' };
+  return deps.classify(tab.url, pageOf(s, tab)?.channel);
+}
+
+function tabInfo(t: TabInfo): TabInfo {
+  return { tabId: t.tabId, url: t.url, title: t.title, incognito: t.incognito, audible: t.audible };
 }
 
 function touch(s: TrackerState, at: number): void {
   if (at > s.lastActiveAt) s.lastActiveAt = at;
 }
 
-function closeSegment(
-  s: TrackerState,
-  at: number,
-  reason: EndReason,
-  deps: TrackerDeps,
-): ClosedSegment[] {
-  const cur: ActiveSegment | null = s.current;
-  s.current = null;
-  if (!cur) return [];
-  const graceEnd = s.lastActiveAt + deps.idleGraceSec * 1000;
-  const end = Math.min(Math.max(at, cur.startedAt), Math.max(graceEnd, cur.startedAt));
-  if (end <= cur.startedAt) return [];
-  const truncated = end < at;
-  return splitByDay(cur.startedAt, end, deps.dayCutoffHour).map((p) => ({
-    date: p.date,
-    start: p.start,
-    end: p.end,
-    host: cur.host,
-    url: cur.url,
-    title: cur.title,
-    categoryId: cur.categoryId,
-    ruleId: cur.ruleId,
-    incognito: cur.incognito,
-    endReason: truncated ? 'cap' : reason,
-  }));
-}
-
-function tryOpen(s: TrackerState, at: number, deps: TrackerDeps): void {
-  if (s.focusedWindowId === null) return;
-  const tab: TabInfo | undefined = s.activeTabs[s.focusedWindowId];
-  if (!tab) return;
+function open(s: TrackerState, tab: TabInfo, cls: ClassifyResult, at: number): void {
   const host = hostOf(tab.url);
-  if (!host) return;
-  const cls = deps.classify(tab.url);
-  if (!cls) return;
+  if (!host || s.focusedWindowId === null) return;
   s.current = {
+    id: `${tab.tabId}-${at}`,
     windowId: s.focusedWindowId,
     tabId: tab.tabId,
     url: tab.url,
     host,
     title: tab.title,
     incognito: tab.incognito,
-    categoryId: cls.categoryId,
-    ruleId: cls.ruleId,
+    category: cls.category,
+    source: cls.source,
+    channel: pageOf(s, tab)?.channel,
     startedAt: at,
+    pieceStart: at,
   };
   touch(s, at);
 }
 
-/** 状态机唯一入口 */
-export function step(prev: TrackerState, ev: TrackerEvent, deps: TrackerDeps): StepResult {
-  const s = cloneState(prev);
-  const closed: ClosedSegment[] = [];
-  const graceMs = deps.idleGraceSec * 1000;
-
-  // 1. 记账：窗口/标签簿记 + 活动水位
-  switch (ev.type) {
-    case 'tab-activated': {
-      s.focusedWindowId = ev.windowId;
-      s.activeTabs[ev.windowId] = {
-        tabId: ev.tabId,
-        url: ev.url,
-        title: ev.title,
-        incognito: ev.incognito,
-      };
-      touch(s, ev.at);
-      break;
-    }
-    case 'tab-updated': {
-      // 无条件 upsert：SW 早启动窗口期可能丢过 onActivated，
-      // 该事件携带的就是此窗口 active tab 的最新信息（adapter 已过滤非 active tab）
-      s.activeTabs[ev.windowId] = {
-        tabId: ev.tabId,
-        url: ev.url,
-        title: ev.title,
-        incognito: ev.incognito,
-      };
-      if (ev.windowId === s.focusedWindowId) touch(s, ev.at);
-      break;
-    }
-    case 'tab-removed': {
-      for (const [wid, t] of Object.entries(s.activeTabs)) {
-        if (t.tabId === ev.tabId) delete s.activeTabs[Number(wid)];
-      }
-      if (s.current?.tabId === ev.tabId) touch(s, ev.at);
-      break;
-    }
-    case 'window-focus': {
-      s.focusedWindowId = ev.windowId === -1 ? null : ev.windowId;
-      if (ev.windowId !== -1) touch(s, ev.at);
-      break;
-    }
-    case 'idle-changed': {
-      s.idleState = ev.state;
-      if (ev.state === 'active') touch(s, ev.at);
-      break;
-    }
-    case 'heartbeat': {
-      // 仅当在计时且证据链连续时前移水位；跳档心跳走下面第 2 步的 cap 关段
-      if (s.current && ev.at - s.lastActiveAt <= graceMs + HB_JITTER_MS) touch(s, ev.at);
-      break;
-    }
-    case 'sync': {
-      s.focusedWindowId = ev.focusedWindowId;
-      s.activeTabs = {};
-      s.idleState = ev.idleState;
-      for (const t of ev.tabs) {
-        s.activeTabs[t.windowId] = {
-          tabId: t.tabId,
-          url: t.url,
-          title: t.title,
-          incognito: t.incognito,
-        };
-      }
-      touch(s, ev.at);
-      break;
-    }
-    case 'startup':
-      break;
-  }
-
-  // 2. 判定当前段是否应结束
-  const cur = s.current;
-  let closeReason: EndReason | null = null;
-  if (cur) {
-    if (ev.type === 'idle-changed' && ev.state !== 'active') closeReason = 'idle';
-    else if (ev.type === 'window-focus' && ev.windowId !== cur.windowId) closeReason = 'blur';
-    else if (ev.type === 'tab-activated' && ev.windowId !== cur.windowId) closeReason = 'blur';
-    else if (ev.type === 'tab-activated' && ev.tabId !== cur.tabId) closeReason = 'event';
-    else if (
-      ev.type === 'tab-updated' &&
-      ev.windowId === cur.windowId &&
-      ev.tabId === cur.tabId &&
-      ev.url !== cur.url
-    )
-      closeReason = 'event';
-    else if (ev.type === 'tab-removed' && ev.tabId === cur.tabId) closeReason = 'event';
-    else if (ev.type === 'startup') closeReason = 'cap';
-    else if (ev.type === 'heartbeat' && ev.at - prev.lastActiveAt > graceMs + HB_JITTER_MS)
-      closeReason = 'cap';
-  }
-  if (closeReason && cur) closed.push(...closeSegment(s, ev.at, closeReason, deps));
-
-  // 3. 判定是否开新段（前提：系统处于 active——idle 中不因记账事件开段）
-  if (!s.current && s.idleState === 'active') {
-    let open = false;
-    if (ev.type === 'tab-activated' || ev.type === 'sync') open = true;
-    else if (ev.type === 'window-focus' && ev.windowId !== -1) open = true;
-    else if (ev.type === 'idle-changed' && ev.state === 'active') open = true;
-    else if (ev.type === 'tab-updated' && isFocusedActiveTab(s, ev.windowId, ev.tabId)) open = true;
-    else if (closed.length > 0 && ev.type === 'heartbeat') open = true; // 心跳 cap 后重开
-    if (open) tryOpen(s, ev.at, deps);
-  }
-
-  return { state: s, closed };
+function toPieces(cur: ActiveSegment, end: number, deps: TrackerDeps): Piece[] {
+  if (end <= cur.pieceStart) return [];
+  return splitByDay(cur.pieceStart, end, deps.dayCutoffHour).map((p) => ({
+    segId: cur.id,
+    date: p.date,
+    start: p.start,
+    end: p.end,
+    host: cur.host,
+    url: cur.url,
+    title: cur.title,
+    category: cur.category,
+    source: cur.source,
+    channel: cur.channel,
+    incognito: cur.incognito,
+  }));
 }
 
-/** 该事件是否命中"聚焦窗口的当前 active tab"（E2E 发现的缺口：新 tab 加载完成也要开段） */
-function isFocusedActiveTab(s: TrackerState, windowId: number, tabId: number): boolean {
-  return (
-    windowId === s.focusedWindowId && s.activeTabs[windowId]?.tabId === tabId
-  );
+/**
+ * 心跳落库：只落到 at − idle 阈值。idle 事件滞后一个阈值才到，届时会回溯关段；
+ * 已落库的部分无法撤回，所以落库线必须停在回溯点之前。实时读数由调用方补上
+ * liveSeconds()。
+ */
+function flush(s: TrackerState, at: number, deps: TrackerDeps): Piece[] {
+  const cur = s.current;
+  if (!cur) return [];
+  const upTo = at - deps.idleThresholdSec * 1000;
+  if (upTo <= cur.pieceStart) return [];
+  const out = toPieces(cur, upTo, deps);
+  cur.pieceStart = upTo;
+  return out;
+}
+
+/** 当前段尚未落库的秒数（实时读数 = 库 + 此值） */
+export function liveSeconds(s: TrackerState, now: number): number {
+  return s.current ? Math.max(0, Math.round((now - s.current.pieceStart) / 1000)) : 0;
+}
+
+function closeCurrent(s: TrackerState, at: number, idle: boolean, deps: TrackerDeps): Piece[] {
+  const cur = s.current;
+  s.current = null;
+  if (!cur) return [];
+  let end = Math.min(at, s.lastActiveAt + deps.idleGraceSec * 1000);
+  if (idle) end = Math.min(end, at - deps.idleThresholdSec * 1000);
+  return toPieces(cur, Math.max(end, cur.pieceStart), deps);
 }

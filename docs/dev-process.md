@@ -12,9 +12,9 @@
 ## 2. 分层架构约束
 
 ```
-src/core/     纯逻辑层：types、tracker 状态机、ruleEngine、budget —— 禁止 import chrome/*，vitest 全覆盖
+src/core/     纯逻辑层：types、tracker、classify、urlMatch、policy、schedule、metrics —— 禁止 import chrome/*，vitest 全覆盖
 src/adapters/ 适配层：chrome.* API、Dexie、storage 的薄封装 —— 只做 IO 转发，不含业务判断
-entrypoints/  WXT 入口层：background / popup / guide / options —— 组装 core + adapters，含 UI
+entrypoints/  WXT 入口层：background / gate.content / popup / report / options —— 组装 core + adapters，含 UI
 ```
 
 规则：**业务判断只允许出现在 core**；adapter 出 bug 修 adapter，算法出 bug 修 core，禁止互相渗透。
@@ -30,7 +30,9 @@ entrypoints/  WXT 入口层：background / popup / guide / options —— 组装
 - [ ] git 审计：`git log --format='%cn <%ce>' | sort -u` 输出**仅** `T-64 <T-64@users.noreply.github.com>`
 - [ ] 真实浏览器冒烟：`npm run build` 产物装入 Chrome，走一遍本版本验收路径
 
-E2E（Playwright + persistent context + `--load-extension`，见 references.md）自 v0.2.0 起纳入门禁。
+E2E（Playwright 驱动本机 Edge + `--load-extension`，`*.test` 经 host-resolver 映射到本地服务，不访问外网）：`npm run e2e`，自 v0.2.0 起纳入门禁。
+
+**v3 起新增：** 版本验收必须包含"真机自用"。单测和 E2E 只能证明逻辑正确，产品是否有效要靠连续自用一周来验证（ADR-0012）。
 
 ## 4. 提交纪律
 
@@ -41,6 +43,6 @@ E2E（Playwright + persistent context + `--load-extension`，见 references.md�
 
 ## 5. 风险最高的三个技术点（实现顺序上优先攻）
 
-1. MV3 service worker 随时被杀 → 计时引擎必须"事件驱动 + 心跳水位 + 宽限截断"（见 key-algorithms.md §1，ADR-0003）
-2. 隐身窗口覆盖 → 检测 + 引导（PRODUCT.md §3.7）
-3. DNR 动态规则重定向到扩展页 → `redirect.extensionPath` + `web_accessible_resources`（见 references.md §3）
+1. MV3 service worker 随时被杀 → 计时引擎必须"对账 + 心跳水位 + 宽限截断"（architecture.md §3，ADR-0003/0014）
+2. 隐身窗口覆盖 → 检测 + 引导（popup 和设置页常驻提示）
+3. 拦截要对已打开的页面、单页应用的站内跳转、频道级内容都生效 → 页面内遮罩（ADR-0013）

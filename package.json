@@ -1,7 +1,7 @@
 {
   "name": "surfwarden",
-  "version": "2.0.0",
-  "description": "本地优先的网页时间统计与监督插件：分用途记录，而不是域名一刀切。",
+  "version": "3.0.0",
+  "description": "按时下线，把刷 B 站和 X 的时间换成学德语。全部数据只在本机。",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,10 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage --coverage.include='src/core/**' --coverage.include='src/shared/**'",
-    "smoke": "node e2e/smoke.mjs",
-    "e2e:block": "node e2e/blocking.mjs",
-    "e2e:options": "node e2e/options.mjs",
     "check:privacy": "node scripts/check-no-net.mjs",
+    "e2e": "node e2e/flows.mjs",
     "shots": "node e2e/shoot.mjs"
   },
   "dependencies": {

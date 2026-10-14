@@ -1,111 +1,182 @@
-import type { UsageRow } from './types';
-import { dateKey } from '../shared/datetime';
+import { dayRange, logicalDayAt } from '../shared/datetime';
+import { siteKey } from './classify';
+import type { CategoryId, DayRow, EventRow, Schedule, SessionRow, UsageRow } from './types';
 
-/**
- * 报告指标（纯函数，IT3/v0.6.0）。全部基于 usage_daily 聚合表（不变量 3 保证其与明细一致），
- * 只有"小时分布"需要 sessions 明细。
- */
+/** 报告指标（纯函数）。输入是 db 原始行，输出是报告页直接可画的结构。 */
 
-/** 最近 n 天的 dateKey 列表（含今天），旧→新 */
-export function lastNDates(n: number, cutoffHour: number, now = Date.now()): string[] {
-  const out: string[] = [];
-  for (let i = n - 1; i >= 0; i--) {
-    out.push(dateKey(now - i * 86_400_000, cutoffHour));
+export type CategoryTotals = Record<CategoryId, number>;
+
+export function emptyTotals(): CategoryTotals {
+  return { german: 0, study: 0, drift: 0, private: 0, other: 0 };
+}
+
+export function totalsByCategory(rows: UsageRow[]): CategoryTotals {
+  const t = emptyTotals();
+  for (const r of rows) t[r.category] += r.seconds;
+  return t;
+}
+
+/** date → 类别秒数 */
+export function totalsByDate(rows: UsageRow[]): Map<string, CategoryTotals> {
+  const out = new Map<string, CategoryTotals>();
+  for (const r of rows) {
+    let t = out.get(r.date);
+    if (!t) out.set(r.date, (t = emptyTotals()));
+    t[r.category] += r.seconds;
   }
   return out;
 }
 
-/** 按日×类别聚合秒数：date → (categoryId → sec) */
-export function aggregateByDate(rows: UsageRow[]): Map<string, Map<string, number>> {
-  const out = new Map<string, Map<string, number>>();
+/** 私密站点不暴露域名：在 TOP 列表里合并为一行 PRIVATE_HOST */
+export const PRIVATE_HOST = '私密站点';
+
+export function topHosts(rows: UsageRow[], n: number): Array<{ host: string; seconds: number; category: CategoryId }> {
+  const m = new Map<string, { seconds: number; byCat: CategoryTotals }>();
   for (const r of rows) {
-    let byCat = out.get(r.date);
-    if (!byCat) {
-      byCat = new Map();
-      out.set(r.date, byCat);
-    }
-    byCat.set(r.categoryId, (byCat.get(r.categoryId) ?? 0) + r.seconds);
+    const host = r.category === 'private' ? PRIVATE_HOST : r.host.replace(/^www\./, '');
+    let e = m.get(host);
+    if (!e) m.set(host, (e = { seconds: 0, byCat: emptyTotals() }));
+    e.seconds += r.seconds;
+    e.byCat[r.category] += r.seconds;
   }
-  return out;
+  return [...m.entries()]
+    .map(([host, e]) => ({ host, seconds: e.seconds, category: dominant(e.byCat) }))
+    .sort((a, b) => b.seconds - a.seconds)
+    .slice(0, n);
 }
 
-/** 按站点聚合秒数（用于 Top 站点），降序 */
-export function aggregateByHost(rows: UsageRow[]): Array<{ host: string; seconds: number }> {
-  const m = new Map<string, number>();
-  for (const r of rows) {
-    m.set(r.host, (m.get(r.host) ?? 0) + r.seconds);
-  }
-  return [...m.entries()].map(([host, seconds]) => ({ host, seconds })).sort((a, b) => b.seconds - a.seconds);
-}
-
-/** 学习 : 娱乐 比值；娱乐为 0 时返回 null（显示 ∞） */
-export function learningToEntertainment(byCat: Map<string, number>): number | null {
-  const l = byCat.get('learning') ?? 0;
-  const e = byCat.get('entertainment') ?? 0;
-  if (e === 0) return null;
-  return Math.round((l / e) * 10) / 10;
+function dominant(t: CategoryTotals): CategoryId {
+  return (Object.entries(t) as Array<[CategoryId, number]>).reduce((a, b) => (b[1] > a[1] ? b : a))[0];
 }
 
 /**
- * 学习 streak：连续"学习 ≥ minSec"的天数，从今天往回数；
- * 今天尚未达标不惩罚——从昨天开始数（今天还没过完）。
+ * 连续达标天数：从昨天往回数"德语 ≥ goal"的天，今天已达标再 +1
+ * （今天还没过完，未达标不打断）。
  */
-export function learningStreak(
-  rows: UsageRow[],
-  minSec: number,
-  cutoffHour: number,
-  now = Date.now(),
-): number {
-  const byDate = aggregateByDate(rows);
+export function germanStreak(byDate: Map<string, CategoryTotals>, dates: string[], goalSec: number): number {
+  if (dates.length === 0 || goalSec <= 0) return 0;
+  const met = (d: string) => (byDate.get(d)?.german ?? 0) >= goalSec;
   let streak = 0;
-  let offset = 1; // 今天没达标不打断，从昨天起算
-  for (;;) {
-    const key = dateKey(now - offset * 86_400_000, cutoffHour);
-    const sec = byDate.get(key)?.get('learning') ?? 0;
-    if (sec >= minSec) {
-      streak++;
-      offset++;
-    } else {
-      break;
-    }
-  }
-  // 今天已达标则再 +1
-  const todayKeyStr = dateKey(now, cutoffHour);
-  if ((byDate.get(todayKeyStr)?.get('learning') ?? 0) >= minSec) streak++;
+  for (let i = dates.length - 2; i >= 0 && met(dates[i]!); i--) streak++;
+  if (met(dates[dates.length - 1]!)) streak++;
   return streak;
 }
 
-/** 今日小时分布（近似：按段起始小时整段归桶），返回 24 个桶的秒数 */
-export function hourBuckets(
-  sessions: Array<{ start: number; end: number }>,
-): number[] {
-  const buckets: number[] = new Array<number>(24).fill(0);
-  for (const s of sessions) {
-    const sec = Math.max(0, Math.round((s.end - s.start) / 1000));
-    if (sec === 0) continue;
-    const h = new Date(s.start).getHours();
-    buckets[h] = (buckets[h] ?? 0) + sec;
-  }
-  return buckets;
+export interface NightStat {
+  date: string;
+  /** 当晚最后活动时刻；无数据为 null */
+  lastAt: number | null;
+  bedtimeAt: number;
+  /** 相对就寝时刻的分钟数，正 = 晚于就寝 */
+  lateMin: number | null;
+  /** 次日逻辑日的首次活动 */
+  firstNextAt: number | null;
+  wakeAt: number;
 }
 
-/** "今天 vs 7 日均值"比值（按总时长） */
-export function todayVsWeekAvg(
-  rows: UsageRow[],
-  dates: string[],
-  cutoffHour: number,
-  now = Date.now(),
-): number | null {
-  const byDate = aggregateByDate(rows);
-  const past = dates.slice(0, -1); // 不含今天
-  if (past.length === 0) return null;
-  const pastTotal = past.reduce((s, d) => {
-    let day = 0;
-    for (const v of byDate.get(d)?.values() ?? []) day += v;
-    return s + day;
-  }, 0);
-  const avg = pastTotal / past.length;
-  if (avg === 0) return null;
-  const todayTotal = [...(byDate.get(dateKey(now, cutoffHour))?.values() ?? [])].reduce((a, b) => a + b, 0);
-  return Math.round((todayTotal / avg) * 100) / 100;
+/** 作息：逻辑日 date 晚上的最后上网 vs 就寝；次日首次上网 vs 起床 */
+export function nightStats(days: DayRow[], dates: string[], schedule: Schedule, cutoffHour: number): NightStat[] {
+  const byDate = new Map(days.map((d) => [d.date, d]));
+  return dates.map((date, idx) => {
+    const row = byDate.get(date);
+    const bedtimeAt = logicalDayAt(date, schedule.bedtime, cutoffHour);
+    const next = dates[idx + 1];
+    const nextRow = next ? byDate.get(next) : undefined;
+    const wakeAt = next ? logicalDayAt(next, schedule.wake, cutoffHour) : NaN;
+    return {
+      date,
+      lastAt: row?.lastAt ?? null,
+      bedtimeAt,
+      lateMin: row ? Math.round((row.lastAt - bedtimeAt) / 60_000) : null,
+      firstNextAt: nextRow?.firstAt ?? null,
+      wakeAt,
+    };
+  });
+}
+
+export interface TimelineBlock {
+  /** 0–1：在逻辑日 [cutoff, 次日 cutoff) 中的位置 */
+  from: number;
+  to: number;
+  category: CategoryId;
+  host: string;
+}
+
+/** 24h 时间线：相邻同类块（间隔 ≤ 2 分钟）合并 */
+export function timeline(sessions: SessionRow[], date: string, cutoffHour: number): TimelineBlock[] {
+  const [start, end] = dayRange(date, cutoffHour);
+  const span = end - start;
+  const sorted = sessions.filter((s) => s.date === date).sort((a, b) => a.start - b.start);
+  const out: TimelineBlock[] = [];
+  for (const s of sorted) {
+    const from = (s.start - start) / span;
+    const to = (s.end - start) / span;
+    const last = out[out.length - 1];
+    if (last && last.category === s.category && from - last.to <= 120_000 / span) {
+      last.to = Math.max(last.to, to);
+    } else {
+      out.push({ from, to, category: s.category, host: s.category === 'private' ? PRIVATE_HOST : s.host });
+    }
+  }
+  return out;
+}
+
+export interface IntentEntry {
+  at: number;
+  site: string;
+  intent: string;
+  minutes: number;
+}
+
+export interface SiteIntentSummary {
+  site: string;
+  /** 申请到的分钟总和 */
+  grantedMin: number;
+  /** 该站点当天实际娱乐分钟 */
+  actualMin: number;
+  entries: IntentEntry[];
+}
+
+/** 意图日志："说要看多久"vs"实际看了多久"（按站点汇总） */
+export function intentSummary(events: EventRow[], usage: UsageRow[]): SiteIntentSummary[] {
+  const actual = new Map<string, number>();
+  for (const r of usage) {
+    if (r.category !== 'drift') continue;
+    const k = siteKey(r.host);
+    actual.set(k, (actual.get(k) ?? 0) + r.seconds);
+  }
+  const bySite = new Map<string, SiteIntentSummary>();
+  for (const e of events) {
+    if (e.type !== 'pass' || !e.site) continue;
+    let s = bySite.get(e.site);
+    if (!s) bySite.set(e.site, (s = { site: e.site, grantedMin: 0, actualMin: 0, entries: [] }));
+    s.grantedMin += e.minutes ?? 0;
+    s.entries.push({ at: e.at, site: e.site, intent: e.intent ?? '', minutes: e.minutes ?? 0 });
+  }
+  // 没申请过却有娱乐时长的站点（例如闸门前的几秒、宵禁延长中）也列出
+  for (const [site, sec] of actual) {
+    if (!bySite.has(site) && sec >= 60) bySite.set(site, { site, grantedMin: 0, actualMin: 0, entries: [] });
+  }
+  for (const s of bySite.values()) s.actualMin = Math.round((actual.get(s.site) ?? 0) / 60);
+  return [...bySite.values()].sort((a, b) => b.actualMin - a.actualMin);
+}
+
+export interface PrivateSummary {
+  /** 冷静期后仍进入 */
+  entered: number;
+  /** 冷静期后离开（每一次都算赢） */
+  skipped: number;
+  /** 离开前选的动作 → 次数 */
+  actions: Record<string, number>;
+}
+
+export function privateSummary(events: EventRow[]): PrivateSummary {
+  const out: PrivateSummary = { entered: 0, skipped: 0, actions: {} };
+  for (const e of events) {
+    if (e.type !== 'private-pass' && e.type !== 'private-skip') continue;
+    if (e.type === 'private-pass') out.entered++;
+    else out.skipped++;
+    if (e.intent) out.actions[e.intent] = (out.actions[e.intent] ?? 0) + 1;
+  }
+  return out;
 }

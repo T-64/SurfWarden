@@ -1,486 +1,386 @@
-import { useCallback, useEffect, useState } from 'react';
-import { configStore } from '../../src/adapters/configStore';
-import { db } from '../../src/adapters/db';
-import { lookupCatalog } from '../../src/core/siteCatalog';
+import { useEffect, useState, type ReactNode } from 'react';
+import { config } from '../../src/adapters/config';
+import { clearAll, exportAll } from '../../src/adapters/db';
+import { GATE_WAITS } from '../../src/core/policy';
+import { formatHHMM, parseHHMM, phaseAt } from '../../src/core/schedule';
+import type { CategoryId, ChannelRule, GermanTarget, Rule, Settings } from '../../src/core/types';
 import { parsePattern } from '../../src/core/urlMatch';
-import type { Category, Rule, Settings, StudyTarget } from '../../src/core/types';
-import { TEMPLATE_PACKS, DEFAULT_RULES } from '../../src/shared/defaults';
+import { CATEGORY_META } from '../../src/shared/defaults';
+import { useBodyMood } from '../../src/shared/mood';
+import '../../src/shared/theme.css';
+import './options.css';
 
-/** 目录命中的组徽章文本（识别而非回忆，启发式 #6） */
-function groupOf(pattern: string): string | null {
-  try {
-    const host = parsePattern(pattern)?.host;
-    return host ? (lookupCatalog(host)?.group ?? null) : null;
-  } catch {
-    return null;
-  }
+const CATS: CategoryId[] = ['german', 'study', 'drift', 'private', 'other'];
+
+interface Draft {
+  settings: Settings;
+  rules: Rule[];
+  channels: ChannelRule[];
+  targets: GermanTarget[];
 }
 
-/** Options 管理页：规则/类别/学习目标/设置 CRUD + 模板导入 + 隐身引导 + 数据管理 */
 export function OptionsApp() {
-  const [rules, setRules] = useState<Rule[]>([]);
-  const [cats, setCats] = useState<Category[]>([]);
-  const [targets, setTargets] = useState<StudyTarget[]>([]);
-  const [settings, setSettings] = useState<Settings | null>(null);
-  const [incognito, setIncognito] = useState<boolean | null>(null);
-  const [savedAt, setSavedAt] = useState(0);
+  const [saved, setSaved] = useState<Draft | null>(null);
+  const [d, setD] = useState<Draft | null>(null);
+  const [incognito, setIncognito] = useState(true);
+  const [flash, setFlash] = useState('');
+  const locked = saved ? phaseAt(Date.now(), saved.settings.schedule) !== 'day' : false;
+  useBodyMood(locked ? 'night' : 'day');
 
-  const reload = useCallback(() => {
-    void (async () => {
-      const [rules, cats, targets, settings] = await Promise.all([
-        configStore.getRules(),
-        configStore.getCategories(),
-        configStore.getStudyTargets(),
-        configStore.getSettings(),
-      ]);
-      setRules(rules);
-      setCats(cats);
-      setTargets(targets);
-      setSettings(settings);
-    })();
-  }, []);
+  async function load(): Promise<void> {
+    const draft = {
+      settings: await config.getSettings(),
+      rules: await config.getRules(),
+      channels: await config.getChannels(),
+      targets: await config.getTargets(),
+    };
+    setSaved(draft);
+    setD(structuredClone(draft));
+    setIncognito(await chrome.extension.isAllowedIncognitoAccess());
+  }
+  useEffect(() => void load(), []);
 
-  useEffect(() => {
-    reload();
-    chrome.extension.isAllowedIncognitoAccess((allowed) => setIncognito(allowed));
-  }, [reload]);
+  if (!d || !saved) return <div className="sw opt" />;
 
-  // 主题强调色应用到根节点
-  useEffect(() => {
-    if (settings?.accent) {
-      document.querySelector('.od-app')?.setAttribute('data-accent', settings.accent);
-    }
-  }, [settings?.accent]);
+  // 收尾 / 宵禁期间锁定"放松约束"的配置——否则半夜改个就寝时间就绕过去了
+  const dirty = JSON.stringify(d) !== JSON.stringify(saved);
+  const badRules = d.rules.filter((r) => !parsePattern(r.pattern));
+  const badTargets = d.targets.filter((t) => !/^https?:\/\//.test(t.url));
+  const invalid = badRules.length + badTargets.length > 0;
+  const s = d.settings;
+  const set = (patch: Partial<Settings>) => setD({ ...d, settings: { ...s, ...patch } });
+  const setRule = (id: string, patch: Partial<Rule>) => setD({ ...d, rules: d.rules.map((r) => (r.id === id ? { ...r, ...patch } : r)) });
+  const dropRule = (id: string) => setD({ ...d, rules: d.rules.filter((r) => r.id !== id) });
+  const publicRules = d.rules.filter((r) => r.category !== 'private');
+  const privateRules = d.rules.filter((r) => r.category === 'private');
 
-  function flash(): void {
-    setSavedAt(Date.now());
-    window.setTimeout(() => setSavedAt(0), 2_000);
+  async function save(): Promise<void> {
+    if (!d || invalid) return;
+    await Promise.all([config.saveSettings(d.settings), config.saveRules(d.rules), config.saveChannels(d.channels), config.saveTargets(d.targets)]);
+    await load();
+    setFlash('已保存，立即生效');
+    setTimeout(() => setFlash(''), 2500);
   }
 
-  async function saveRules(next: Rule[]): Promise<void> {
-    await configStore.saveRules(next);
-    setRules(next);
-    flash();
-  }
-  async function saveCats(next: Category[]): Promise<void> {
-    await configStore.saveCategories(next);
-    setCats(next);
-    flash();
-  }
-  async function saveTargets(next: StudyTarget[]): Promise<void> {
-    await configStore.saveStudyTargets(next);
-    setTargets(next);
-    flash();
-  }
-  async function saveSettings(next: Settings): Promise<void> {
-    await configStore.saveSettings(next);
-    setSettings(next);
-    flash();
-  }
-
-  async function importPack(packId: string): Promise<void> {
-    const pack = TEMPLATE_PACKS.find((p) => p.id === packId);
-    if (!pack) return;
-    const existing = new Set(rules.map((r) => r.pattern));
-    let createdAt = rules.reduce((m, r) => Math.max(m, r.createdAt), 0);
-    const additions: Rule[] = pack.items
-      .filter((it) => !existing.has(it.pattern))
-      .map((it, i) => ({
-        id: `tpl-${pack.id}-${i}-${Date.now()}`,
-        name: it.name,
-        pattern: it.pattern,
-        category: it.category,
-        enabled: true,
-        createdAt: ++createdAt,
-      }));
-    await saveRules([...rules, ...additions]);
-  }
-
-  async function exportAll(): Promise<void> {
-    const config = await chrome.storage.local.get(null);
-    const [sessions, usageDaily, exempts] = await Promise.all([
-      db.sessions.toArray(),
-      db.usageDaily.toArray(),
-      db.exempts.toArray(),
-    ]);
-    const blob = new Blob(
-      [JSON.stringify({ app: 'SurfWarden', exportedAt: new Date().toISOString(), config, data: { sessions, usageDaily, exempts } }, null, 2)],
-      { type: 'application/json' },
-    );
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `surfwarden-export-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }
-
-  async function clearAll(): Promise<void> {
-    if (!window.confirm('清空全部规则与使用数据？此操作不可恢复。')) return;
-    if (!window.confirm('再次确认：真的要清空吗？')) return;
-    await chrome.storage.local.clear();
-    await db.delete();
-    await configStore.ensureDefaults();
-    reload();
+  function addRule(category: CategoryId): void {
+    const createdAt = d!.rules.reduce((m, r) => Math.max(m, r.createdAt), 0) + 1;
+    setD({ ...d!, rules: [{ id: `r-${Date.now()}`, pattern: '', category, createdAt }, ...d!.rules] });
   }
 
   return (
-    <div className="wrap">
-      <h1>SurfWarden 设置</h1>
-      <p className="muted">所有数据仅存本机，无任何网络请求。保存后立即生效（后台热更新）。</p>
-      {savedAt > 0 && <p className="ok">✓ 已保存</p>}
+    <div className="sw opt" data-mood={locked ? 'night' : 'day'}>
+      <header className="opt-head">
+        <p className="sw-label">SurfWarden · 设置</p>
+        <h1 className="sw-title">规则写给白天的自己。</h1>
+        <p className="sw-note">晚上（收尾和宵禁期间）作息、额度和白名单会锁住，第二天白天再改。所有数据只在本机。</p>
+      </header>
 
-      {/* 新手完成度清单（IT5） */}
-      {settings && (
-        <section>
-          <h2>🚀 初始设置</h2>
-          {(() => {
-            const steps = [
-              { label: '开启隐身授权（不留监督后门）', done: incognito === true },
-              { label: '配置学习目标（引导页"去学习"的入口）', done: targets.length > 0 },
-              { label: '设定监督档位（娱乐类 ≠ 只统计）', done: cats.find((c) => c.id === 'entertainment')?.action !== 'track' },
-              { label: '导入模板包或添加自定义规则', done: rules.length > DEFAULT_RULES.length },
-            ];
-            const doneCount = steps.filter((s) => s.done).length;
-            return (
-              <>
-                <div className="od-meter-row" style={{ marginBottom: 6 }}>
-                  <span className="muted" style={{ margin: 0 }}>完成 {doneCount} / {steps.length}</span>
-                  <span className="ok" style={{ fontSize: 12 }}>{doneCount === steps.length ? '✓ 全部就绪' : ''}</span>
-                </div>
-                <div className="meter-like" style={{ height: 6, borderRadius: 99, background: 'var(--elevated)', overflow: 'hidden', marginBottom: 10 }}>
-                  <div style={{ height: '100%', width: `${(doneCount / steps.length) * 100}%`, background: 'var(--green)', borderRadius: 99 }} />
-                </div>
-                {steps.map((s) => (
-                  <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', fontSize: 13 }}>
-                    <span style={{ color: s.done ? 'var(--green)' : 'var(--faint)' }}>{s.done ? '✓' : '○'}</span>
-                    <span style={{ color: s.done ? 'var(--body)' : 'var(--mute)' }}>{s.label}</span>
-                  </div>
-                ))}
-              </>
-            );
-          })()}
-        </section>
+      {!incognito && (
+        <Block title="隐身窗口还没授权" note="不打开的话，隐身窗口里的浏览既不会被统计，也不会被拦。">
+          <button className="sw-btn sw-btn-ghost" onClick={() => void chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` })}>
+            打开扩展详情 → 允许在隐身模式下运行
+          </button>
+        </Block>
       )}
 
-      <section>
-        <h2>🔒 隐身窗口覆盖</h2>
-        {incognito === null ? (
-          <p className="muted">检测中…</p>
-        ) : incognito ? (
-          <p className="ok">✓ 已允许隐身模式——隐身窗口的浏览也在统计与预算内（PRODUCT.md §3.7）。</p>
-        ) : (
-          <div>
-            <p className="warn">⚠ 尚未开启：隐身窗口的浏览不会被统计，等于监督有后门。</p>
-            <p className="muted">
-              三步开启（约 10 秒）：① 在地址栏打开 <code>chrome://extensions</code>（Edge 为{' '}
-              <code>edge://extensions</code>）② 找到 SurfWarden → 详情 ③ 打开「允许隐身模式」。开启后本页状态自动刷新。
-            </p>
-            <button className="btn" onClick={() => chrome.tabs.create({ url: 'chrome://extensions' })}>
-              打开扩展管理页
-            </button>
-          </div>
-        )}
-      </section>
-
-      <section>
-        <h2>📦 模板包一键导入</h2>
-        <p className="muted">按 pattern 去重后追加，不会覆盖你已调整的规则。</p>
-        <div className="row">
-          {TEMPLATE_PACKS.map((p) => (
-            <button key={p.id} className="btn" onClick={() => void importPack(p.id)}>
-              导入「{p.name}」（{p.items.length} 条）
-            </button>
+      <Block
+        title="作息"
+        note={`白天 → ${formatHHMM(s.schedule.windDown)} 收尾（娱乐关闭）→ ${formatHHMM(s.schedule.bedtime)} 宵禁 → ${formatHHMM(s.schedule.wake)} 起床`}
+      >
+        <div className="fields three">
+          {(
+            [
+              ['windDown', '开始收尾'],
+              ['bedtime', '上床'],
+              ['wake', '起床'],
+            ] as const
+          ).map(([k, label]) => (
+            <Field key={k} label={label}>
+              <input
+                type="time"
+                className="sw-input time"
+                disabled={locked}
+                value={formatHHMM(s.schedule[k])}
+                onChange={(e) => {
+                  const m = parseHHMM(e.target.value);
+                  if (m !== null) set({ schedule: { ...s.schedule, [k]: m } });
+                }}
+              />
+            </Field>
           ))}
         </div>
-      </section>
+      </Block>
 
-      <section>
-        <h2>📏 规则（更具体的规则永远赢）</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>名称</th>
-              <th style={{ width: '38%' }}>Pattern</th>
-              <th style={{ width: '16%' }}>类别</th>
-              <th style={{ width: '8%' }}>启用</th>
-              <th style={{ width: '10%' }}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rules.map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <input
-                    type="text"
-                    value={r.name}
-                    onChange={(e) => setRules(rules.map((x) => (x.id === r.id ? { ...x, name: e.target.value } : x)))}
-                  />
-                  {groupOf(r.pattern) && (
-                    <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>目录组：{groupOf(r.pattern)}</div>
-                  )}
-                </td>
-                <td>
-                  <input
-                    type="text"
-                    value={r.pattern}
-                    onChange={(e) => setRules(rules.map((x) => (x.id === r.id ? { ...x, pattern: e.target.value } : x)))}
-                  />
-                </td>
-                <td>
-                  <select
-                    value={r.category}
-                    onChange={(e) => setRules(rules.map((x) => (x.id === r.id ? { ...x, category: e.target.value } : x)))}
-                  >
-                    {cats.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td>
-                  <input
-                    type="checkbox"
-                    checked={r.enabled}
-                    onChange={(e) => setRules(rules.map((x) => (x.id === r.id ? { ...x, enabled: e.target.checked } : x)))}
-                  />
-                </td>
-                <td>
-                  <button className="btn btn-danger" onClick={() => void saveRules(rules.filter((x) => x.id !== r.id))}>
-                    删除
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="row" style={{ marginTop: 10 }}>
-          <button
-            className="btn"
-            onClick={() =>
-              void saveRules([
-                ...rules,
-                {
-                  id: `r-${Date.now()}`,
-                  name: '新规则',
-                  pattern: 'example.com/path/*',
-                  category: 'entertainment',
-                  enabled: true,
-                  createdAt: rules.reduce((m, r) => Math.max(m, r.createdAt), 0) + 1,
-                },
-              ])
-            }
-          >
-            ＋ 添加规则
-          </button>
-          <button className="btn btn-primary" onClick={() => void saveRules(rules)}>
-            保存规则
-          </button>
-          <span className="muted">语法：域名 / 域名+路径通配 / 完整 URL / re:正则</span>
+      <Block title="德语" note="拦截页和 popup 的「去学德语」优先回到你上次学德语的页面；没有记录时用下面第一个入口。">
+        <div className="fields">
+          <Field label="每日目标（分钟）">
+            <Num value={s.germanGoalMin} min={5} max={600} onChange={(v) => set({ germanGoalMin: v })} />
+          </Field>
         </div>
-      </section>
-
-      <section>
-        <h2>🎨 类别与预算</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>名称</th>
-              <th style={{ width: '14%' }}>颜色</th>
-              <th style={{ width: '22%' }}>监督档位</th>
-              <th style={{ width: '16%' }}>预算（分/天）</th>
-            </tr>
-          </thead>
-          <tbody>
-            {cats.map((c) => (
-              <tr key={c.id}>
-                <td>{c.name}</td>
-                <td>
-                  <input
-                    type="text"
-                    value={c.color}
-                    onChange={(e) => setCats(cats.map((x) => (x.id === c.id ? { ...x, color: e.target.value } : x)))}
-                  />
-                </td>
-                <td>
-                  <select
-                    value={c.action}
-                    onChange={(e) =>
-                      setCats(cats.map((x) => (x.id === c.id ? { ...x, action: e.target.value as Category['action'] } : x)))
-                    }
-                  >
-                    <option value="track">只统计</option>
-                    <option value="nudge">提醒（nudge）</option>
-                    <option value="budget">预算封锁</option>
-                    <option value="hard">完全封锁</option>
-                  </select>
-                </td>
-                <td>
-                  <input
-                    type="number"
-                    min={0}
-                    placeholder="不限"
-                    value={c.budgetMin ?? ''}
-                    onChange={(e) =>
-                      setCats(
-                        cats.map((x) =>
-                          x.id === c.id
-                            ? { ...x, budgetMin: e.target.value === '' ? undefined : Number(e.target.value) }
-                            : x,
-                        ),
-                      )
-                    }
-                  />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="row" style={{ marginTop: 10 }}>
-          <button className="btn btn-primary" onClick={() => void saveCats(cats)}>
-            保存类别
-          </button>
-          <span className="muted">档位：只统计 → 提醒 → 预算封锁 → 完全封锁（PRODUCT.md §3.4）</span>
-        </div>
-      </section>
-
-      <section>
-        <h2>📗 学习目标（引导页"去学习"的入口）</h2>
-        <table>
-          <tbody>
-            {targets.map((t) => (
-              <tr key={t.id}>
-                <td style={{ width: '30%' }}>
-                  <input
-                    type="text"
-                    value={t.name}
-                    onChange={(e) => setTargets(targets.map((x) => (x.id === t.id ? { ...x, name: e.target.value } : x)))}
-                  />
-                </td>
-                <td>
-                  <input
-                    type="url"
-                    value={t.url}
-                    onChange={(e) => setTargets(targets.map((x) => (x.id === t.id ? { ...x, url: e.target.value } : x)))}
-                  />
-                </td>
-                <td style={{ width: '10%' }}>
-                  <button className="btn btn-danger" onClick={() => void saveTargets(targets.filter((x) => x.id !== t.id))}>
-                    删除
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="row" style={{ marginTop: 10 }}>
-          <button
-            className="btn"
-            onClick={() =>
-              void saveTargets([...targets, { id: `t-${Date.now()}`, name: '德语课 A2', url: 'https://…' }])
-            }
-          >
-            ＋ 添加学习目标
-          </button>
-          <button className="btn btn-primary" onClick={() => void saveTargets(targets)}>
-            保存学习目标
-          </button>
-        </div>
-      </section>
-
-      <section>
-        <h2>⚙️ 行为参数</h2>
-        {settings && (
-          <div className="grid">
-            <label className="field">
-              一天结束时刻（点）
-              <input
-                type="number"
-                min={0}
-                max={23}
-                value={settings.dayCutoffHour}
-                onChange={(e) => setSettings({ ...settings, dayCutoffHour: Number(e.target.value) })}
-              />
-            </label>
-            <label className="field">
-              idle 判定阈值（秒）
-              <input
-                type="number"
-                min={15}
-                max={300}
-                value={settings.idleThresholdSec}
-                onChange={(e) => setSettings({ ...settings, idleThresholdSec: Number(e.target.value) })}
-              />
-            </label>
-            <label className="field">
-              心跳宽限（秒）
-              <input
-                type="number"
-                min={30}
-                max={600}
-                value={settings.idleGraceSec}
-                onChange={(e) => setSettings({ ...settings, idleGraceSec: Number(e.target.value) })}
-              />
-            </label>
-            <label className="field">
-              豁免次数 / 天
-              <input
-                type="number"
-                min={0}
-                max={20}
-                value={settings.exemptPerDay}
-                onChange={(e) => setSettings({ ...settings, exemptPerDay: Number(e.target.value) })}
-              />
-            </label>
-            <label className="field">
-              单次豁免（分钟）
-              <input
-                type="number"
-                min={1}
-                max={60}
-                value={settings.exemptMinutes}
-                onChange={(e) => setSettings({ ...settings, exemptMinutes: Number(e.target.value) })}
-              />
-            </label>
-            <label className="field">
-              主题强调色
-              <select
-                value={settings.accent ?? 'signal'}
-                onChange={(e) => {
-                  const next = { ...settings, accent: e.target.value as Settings['accent'] };
-                  setSettings(next);
-                  void configStore.saveSettings(next);
-                }}
-              >
-                <option value="signal">信号绿（默认）</option>
-                <option value="cyan">雷达青</option>
-                <option value="violet">暗夜紫</option>
-                <option value="amber">琥珀</option>
-              </select>
-            </label>
+        <p className="sw-label lab">德语入口</p>
+        {d.targets.map((t, i) => (
+          <div className="row" key={t.id}>
+            <input
+              className="sw-input name"
+              value={t.name}
+              placeholder="名称"
+              onChange={(e) => setD({ ...d, targets: d.targets.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)) })}
+            />
+            <input
+              className={`sw-input grow${badTargets.includes(t) ? ' bad' : ''}`}
+              value={t.url}
+              placeholder="https://…"
+              onChange={(e) => setD({ ...d, targets: d.targets.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)) })}
+            />
+            <button className="sw-btn-quiet" onClick={() => setD({ ...d, targets: d.targets.filter((_, j) => j !== i) })}>
+              删除
+            </button>
           </div>
-        )}
-        <div className="row" style={{ marginTop: 10 }}>
-          <button className="btn btn-primary" disabled={!settings} onClick={() => settings && void saveSettings(settings)}>
-            保存参数
-          </button>
-        </div>
-      </section>
+        ))}
+        <button className="sw-btn-quiet" onClick={() => setD({ ...d, targets: [...d.targets, { id: `t-${Date.now()}`, name: '', url: '' }] })}>
+          + 添加入口
+        </button>
+      </Block>
 
-      <section>
-        <h2>💾 数据</h2>
+      <Block title="娱乐" note={`白天进入娱乐站要先写意图、选时长；每次申请前的等待逐次变长（${GATE_WAITS.join(' / ')} 秒，不可改）。`}>
+        <div className="fields">
+          <Field label="每日总额（分钟）">
+            <Num value={s.driftCapMin} min={0} max={600} disabled={locked} onChange={(v) => set({ driftCapMin: v })} />
+          </Field>
+          <Field label="可选时长（分钟，逗号分隔）">
+            <input
+              className="sw-input"
+              disabled={locked}
+              defaultValue={s.passOptionsMin.join(', ')}
+              onChange={(e) => {
+                const opts = e.target.value
+                  .split(/[,，\s]+/)
+                  .map(Number)
+                  .filter((n) => Number.isInteger(n) && n > 0 && n <= 120);
+                if (opts.length > 0) set({ passOptionsMin: opts });
+              }}
+            />
+          </Field>
+        </div>
+      </Block>
+
+      <Block title="私密站点" note="打开这类网站时先进入冷静期：离开屏幕去洗把冷水脸、做几个俯卧撑，回来再决定。夜间一律拦截。">
+        <div className="fields three">
+          <Field label="冷静期（秒）">
+            <Num value={s.privateCooldownSec} min={60} max={900} disabled={locked} onChange={(v) => set({ privateCooldownSec: v })} />
+          </Field>
+          <Field label="进入后可停留（分钟）">
+            <Num value={s.privatePassMin} min={5} max={60} disabled={locked} onChange={(v) => set({ privatePassMin: v })} />
+          </Field>
+          <Field label="每天最多（次）">
+            <Num value={s.privatePerDay} min={0} max={5} disabled={locked} onChange={(v) => set({ privatePerDay: v })} />
+          </Field>
+        </div>
+        <details className="fold">
+          <summary>站点列表（{privateRules.length} 个）</summary>
+          <RuleRows rules={privateRules} bad={badRules} onSet={setRule} onDrop={dropRule} />
+          <button className="sw-btn-quiet" onClick={() => addRule('private')}>
+            + 添加站点
+          </button>
+        </details>
+      </Block>
+
+      <Block title="宵禁白名单" note="宵禁期间这些类别和站点仍可打开（会显示「已过就寝 N 分钟」）。娱乐和私密永远不在白名单里。">
+        <div className="checks">
+          {(['german', 'study', 'other'] as const).map((c) => (
+            <label key={c}>
+              <input
+                type="checkbox"
+                disabled={locked}
+                checked={s.curfewAllow.categories.includes(c)}
+                onChange={(e) =>
+                  set({
+                    curfewAllow: {
+                      ...s.curfewAllow,
+                      categories: e.target.checked ? [...s.curfewAllow.categories, c] : s.curfewAllow.categories.filter((x) => x !== c),
+                    },
+                  })
+                }
+              />
+              {CATEGORY_META[c].name}
+            </label>
+          ))}
+        </div>
+        <Field label="额外放行的站点（每行一个域名，含子域）">
+          <textarea
+            className="sw-input mono"
+            rows={8}
+            disabled={locked}
+            defaultValue={s.curfewAllow.hosts.join('\n')}
+            onChange={(e) =>
+              set({
+                curfewAllow: {
+                  ...s.curfewAllow,
+                  hosts: e.target.value
+                    .split('\n')
+                    .map((x) => x.trim())
+                    .filter(Boolean),
+                },
+              })
+            }
+          />
+        </Field>
+        <div className="fields">
+          <Field label="每晚可延长次数">
+            <Num value={s.curfewExtPerNight} min={0} max={3} disabled={locked} onChange={(v) => set({ curfewExtPerNight: v })} />
+          </Field>
+          <Field label="每次延长（分钟）">
+            <Num value={s.curfewExtMin} min={1} max={30} disabled={locked} onChange={(v) => set({ curfewExtMin: v })} />
+          </Field>
+        </div>
+      </Block>
+
+      <Block
+        title="网址规则"
+        note="写法：域名（含子域）· 域名/路径/* · *.域名/* · 完整网址 · re:正则。越具体的规则越优先；B 站、YouTube 按 UP 主区分请用下面的「频道」。"
+      >
+        <button className="sw-btn-quiet" onClick={() => addRule('drift')}>
+          + 添加规则
+        </button>
+        <RuleRows rules={publicRules} bad={badRules} onSet={setRule} onDrop={dropRule} />
+        {badRules.length > 0 && <p className="bad-note">有 {badRules.length} 条规则写法不对（红框），改好才能保存。</p>}
+      </Block>
+
+      <Block title="频道" note="B 站 UP 主 / YouTube 频道。在视频页的遮罩或 popup 里一键标记；频道优先于网址规则。">
+        {d.channels.length === 0 && <p className="sw-note">还没有标记过频道。</p>}
+        {d.channels.map((c, i) => (
+          <div className="row rule" key={`${c.platform}:${c.id}`}>
+            <span className="plat">{c.platform === 'bilibili' ? 'B 站' : 'YouTube'}</span>
+            <span className="grow">{c.name}</span>
+            <span className="sw-mono faint">{c.id}</span>
+            <CatSelect value={c.category} onChange={(cat) => setD({ ...d, channels: d.channels.map((x, j) => (j === i ? { ...x, category: cat } : x)) })} />
+            <button className="sw-btn-quiet" onClick={() => setD({ ...d, channels: d.channels.filter((_, j) => j !== i) })}>
+              删除
+            </button>
+          </div>
+        ))}
+      </Block>
+
+      <Block title="高级">
+        <div className="fields">
+          <Field label="无输入多久算离开（秒）· 有声音或视频在播时不算">
+            <Num value={s.idleThresholdSec} min={15} max={600} onChange={(v) => set({ idleThresholdSec: v })} />
+          </Field>
+          <Field label="新的一天从几点开始（凌晨的上网算前一晚）">
+            <Num value={s.dayCutoffHour} min={0} max={8} onChange={(v) => set({ dayCutoffHour: v })} />
+          </Field>
+        </div>
+      </Block>
+
+      <Block title="数据" note="明细保留 90 天；每日汇总、作息和意图日志永久保留。卸载扩展即删除全部数据。">
         <div className="row">
-          <button className="btn" onClick={() => void exportAll()}>
+          <button className="sw-btn sw-btn-ghost" onClick={() => void exportJson()}>
             导出全部数据（JSON）
           </button>
-          <button className="btn btn-danger" onClick={() => void clearAll()}>
-            清空全部数据与配置
+          <button
+            className="sw-btn sw-btn-danger"
+            onClick={() => {
+              if (confirm('清空全部使用记录？配置保留。此操作不可撤销。') && confirm('再确认一次：清空全部记录？')) void clearAll().then(() => setFlash('记录已清空'));
+            }}
+          >
+            清空使用记录
           </button>
         </div>
-        <p className="muted">
-          明细保留 90 天（每日切时自动清理），日聚合与豁免记录永久保留。所有数据只在本机：IndexedDB + chrome.storage。
-        </p>
-      </section>
+      </Block>
+
+      <div className={`savebar${dirty || flash ? ' show' : ''}`}>
+        <span>{flash || (invalid ? '有写法不对的项，改好才能保存' : '有未保存的修改')}</span>
+        {dirty && (
+          <>
+            <button className="sw-btn-quiet" onClick={() => setD(structuredClone(saved))}>
+              撤销
+            </button>
+            <button className="sw-btn sw-btn-primary" disabled={invalid} onClick={() => void save()}>
+              保存
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
+}
+
+function Block({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
+  return (
+    <section className="block">
+      <div className="block-head">
+        <h2 className="sw-h2">{title}</h2>
+        {note && <p className="sw-note">{note}</p>}
+      </div>
+      <div className="block-body">{children}</div>
+    </section>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function Num({ value, min, max, disabled, onChange }: { value: number; min: number; max: number; disabled?: boolean; onChange: (v: number) => void }) {
+  return (
+    <input
+      type="number"
+      className="sw-input"
+      min={min}
+      max={max}
+      disabled={disabled}
+      value={value}
+      onChange={(e) => {
+        const v = Math.round(Number(e.target.value));
+        if (Number.isFinite(v)) onChange(Math.min(max, Math.max(min, v)));
+      }}
+    />
+  );
+}
+
+function CatSelect({ value, onChange }: { value: CategoryId; onChange: (c: CategoryId) => void }) {
+  return (
+    <select className="sw-select cat" value={value} onChange={(e) => onChange(e.target.value as CategoryId)}>
+      {CATS.map((c) => (
+        <option key={c} value={c}>
+          {CATEGORY_META[c].name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function RuleRows({ rules, bad, onSet, onDrop }: { rules: Rule[]; bad: Rule[]; onSet: (id: string, p: Partial<Rule>) => void; onDrop: (id: string) => void }) {
+  return (
+    <div className="rules">
+      {rules.map((r) => (
+        <div className="row rule" key={r.id}>
+          <input className={`sw-input mono grow${bad.includes(r) ? ' bad' : ''}`} value={r.pattern} placeholder="例如 live.bilibili.com" onChange={(e) => onSet(r.id, { pattern: e.target.value })} />
+          <CatSelect value={r.category} onChange={(c) => onSet(r.id, { category: c })} />
+          <button className="sw-btn-quiet" onClick={() => onDrop(r.id)}>
+            删除
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+async function exportJson(): Promise<void> {
+  const data = {
+    exportedAt: new Date().toISOString(),
+    config: await chrome.storage.local.get(null),
+    ...(await exportAll()),
+  };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `surfwarden-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
 }

@@ -1,284 +1,245 @@
 import { describe, expect, it } from 'vitest';
-import { initialState, step } from '../src/core/tracker';
-import type {
-  ClosedSegment,
-  TrackerDeps,
-  TrackerEvent,
-  TrackerState,
-} from '../src/core/types';
+import { makeClassifier } from '../src/core/classify';
+import { initialState, liveSeconds, step } from '../src/core/tracker';
+import type { Piece, TrackerDeps, TrackerEvent, TrackerState } from '../src/core/types';
 
-function localTs(h: number, m = 0, s = 0): number {
-  // 固定基准日 2026-09-06，结果与时区无关
-  return new Date(2026, 8, 6, h, m, s, 0).getTime();
-}
-const T0 = localTs(10);
-
-const mkDeps = (cutoffHour = 0): TrackerDeps => ({
+const deps: TrackerDeps = {
   idleGraceSec: 60,
-  dayCutoffHour: cutoffHour,
-  classify: (url) =>
-    url.startsWith('chrome://')
-      ? null
-      : { categoryId: url.includes('twitter') ? 'entertainment' : 'neutral' },
-});
+  idleThresholdSec: 120,
+  dayCutoffHour: 5,
+  classify: makeClassifier(
+    [
+      { id: 'r1', pattern: 'drift.test', category: 'drift', createdAt: 1 },
+      { id: 'r2', pattern: 'german.test', category: 'german', createdAt: 2 },
+      { id: 'r3', pattern: 'bilibili.com', category: 'drift', createdAt: 3 },
+    ],
+    [{ platform: 'bilibili', id: '123', name: '德语老师', category: 'german' }],
+  ),
+};
 
-const act = (
-  tabId: number,
-  windowId: number,
-  url: string,
-  at: number,
-  incognito = false,
-): TrackerEvent => ({ type: 'tab-activated', windowId, tabId, url, incognito, at });
-const upd = (
-  tabId: number,
-  windowId: number,
-  url: string,
-  at: number,
-): TrackerEvent => ({ type: 'tab-updated', windowId, tabId, url, incognito: false, at });
-const hb = (at: number): TrackerEvent => ({ type: 'heartbeat', at });
+const T0 = new Date(2026, 9, 14, 10, 0, 0).getTime();
+const s = (sec: number) => T0 + sec * 1000;
 
-function run(
-  events: TrackerEvent[],
-  deps: TrackerDeps = mkDeps(),
-  init: TrackerState = initialState(),
-): { state: TrackerState; closed: ClosedSegment[] } {
-  let state = init;
-  const closed: ClosedSegment[] = [];
+function run(events: TrackerEvent[], from: TrackerState = initialState()) {
+  let state = from;
+  const pieces: Piece[] = [];
   for (const ev of events) {
     const r = step(state, ev, deps);
     state = r.state;
-    closed.push(...r.closed);
+    pieces.push(...r.pieces);
   }
-  return { state, closed };
+  return { state, pieces };
 }
 
-const TW = 'https://twitter.com/home';
-const GH = 'https://github.com/tan';
+const act = (tabId: number, url: string, at: number, extra: Partial<{ windowId: number; audible: boolean; title: string }> = {}): TrackerEvent => ({
+  type: 'tab-activated',
+  windowId: extra.windowId ?? 1,
+  tabId,
+  url,
+  title: extra.title,
+  incognito: false,
+  audible: extra.audible,
+  at,
+});
+const upd = (tabId: number, url: string, at: number, extra: Partial<{ windowId: number; audible: boolean; title: string }> = {}): TrackerEvent => ({
+  type: 'tab-updated',
+  windowId: extra.windowId ?? 1,
+  tabId,
+  url,
+  title: extra.title,
+  incognito: false,
+  audible: extra.audible,
+  at,
+});
+const hb = (at: number): TrackerEvent => ({ type: 'heartbeat', at });
+const heartbeats = (fromSec: number, toSec: number) => {
+  const out: TrackerEvent[] = [];
+  for (let t = fromSec; t <= toSec; t += 30) out.push(hb(s(t)));
+  return out;
+};
+const sec = (ps: Piece[], cat?: string) =>
+  ps.filter((p) => !cat || p.category === cat).reduce((a, p) => a + (p.end - p.start) / 1000, 0);
 
-describe('计时状态机（key-algorithms §1.3 边界表）', () => {
-  it('E1 正常切换：旧段闭合、新段开启、边界连续', () => {
-    const { state, closed } = run([act(1, 100, TW, T0), act(2, 100, GH, T0 + 60_000)]);
-    expect(closed).toHaveLength(1);
-    expect(closed[0]).toMatchObject({
-      url: TW,
-      host: 'twitter.com',
-      categoryId: 'entertainment',
-      start: T0,
-      end: T0 + 60_000,
-      endReason: 'event',
-    });
-    expect(state.current).toMatchObject({ tabId: 2, url: GH, categoryId: 'neutral' });
-    expect(state.current?.startedAt).toBe(T0 + 60_000);
+describe('开段与切换', () => {
+  it('激活 → 切标签：前一段按切换时刻关闭', () => {
+    const { pieces, state } = run([act(1, 'https://drift.test/a', s(0)), act(2, 'https://german.test/', s(40))]);
+    expect(pieces).toHaveLength(1);
+    expect(pieces[0]).toMatchObject({ category: 'drift', start: s(0), end: s(40), host: 'drift.test' });
+    expect(state.current).toMatchObject({ tabId: 2, category: 'german' });
   });
 
-  it('E2 单页久留 + 心跳：水位持续延长，时长如实累计', () => {
-    const events: TrackerEvent[] = [act(1, 100, TW, T0)];
-    for (let i = 1; i <= 10; i++) events.push(hb(T0 + i * 30_000));
-    events.push(act(2, 100, GH, T0 + 330_000)); // 最后一个心跳 +300s，再过 30s 切走
-    const { closed } = run(events);
-    expect(closed).toHaveLength(1);
-    expect(closed[0]!.end - closed[0]!.start).toBe(330_000);
-    expect(closed[0]!.endReason).toBe('event');
-  });
-
-  it('E3 SW 被杀 10 分钟：空窗被 cap 截断，恢复后重开新段', () => {
-    const { closed } = run([
-      act(1, 100, TW, T0),
-      hb(T0 + 30_000),
-      hb(T0 + 930_000), // 距水位 900s，证据断裂
-      act(2, 100, GH, T0 + 960_000),
+  it('同 URL 只改标题不切段', () => {
+    const { pieces, state } = run([
+      act(1, 'https://drift.test/a', s(0), { title: 'x' }),
+      upd(1, 'https://drift.test/a', s(10), { title: 'y' }),
     ]);
-    expect(closed).toHaveLength(2);
-    expect(closed[0]!.end - closed[0]!.start).toBe(90_000); // 水位 30s + 宽限 60s
-    expect(closed[0]!.endReason).toBe('cap');
-    expect(closed[1]!.start).toBe(T0 + 930_000);
-    expect(closed[1]!.end - closed[1]!.start).toBe(30_000);
+    expect(pieces).toHaveLength(0);
+    expect(state.current?.title).toBe('y');
   });
 
-  it('E4 idle：段以 idle 关闭', () => {
-    const { closed, state } = run([
-      act(1, 100, TW, T0),
-      hb(T0 + 30_000),
-      { type: 'idle-changed', state: 'idle', at: T0 + 60_000 },
-    ]);
-    expect(closed).toHaveLength(1);
-    expect(closed[0]!.endReason).toBe('idle');
-    expect(closed[0]!.end - closed[0]!.start).toBe(60_000);
+  it('非 http(s) 不计时', () => {
+    const { state } = run([act(1, 'chrome://newtab/', s(0))]);
     expect(state.current).toBeNull();
   });
 
-  it('E5 idle 恢复：重新开段并重新分类', () => {
+  it('所有窗口失焦关段，回焦重开', () => {
+    const { pieces, state } = run([
+      act(1, 'https://drift.test/a', s(0)),
+      { type: 'window-focus', windowId: -1, at: s(20) },
+      { type: 'window-focus', windowId: 1, at: s(50) },
+    ]);
+    expect(sec(pieces)).toBe(20);
+    expect(state.current?.startedAt).toBe(s(50));
+  });
+
+  it('非聚焦窗口的标签更新不影响当前段', () => {
+    const { pieces, state } = run([
+      act(9, 'https://german.test/', s(0), { windowId: 2 }),
+      act(1, 'https://drift.test/a', s(5)),
+      upd(9, 'https://german.test/next', s(10), { windowId: 2 }),
+    ]);
+    expect(sec(pieces, 'german')).toBe(5);
+    expect(state.current?.tabId).toBe(1);
+  });
+
+  it('跨逻辑日（05:00）拆成两片', () => {
+    const at = (h: number, m: number) => new Date(2026, 9, 15, h, m).getTime();
+    const beats = [30, 60, 90, 120, 150].map((d) => hb(at(4, 58) + d * 1000));
+    const { pieces } = run([act(1, 'https://drift.test/', at(4, 58)), ...beats, act(2, 'https://german.test/', at(5, 1))]);
+    expect([...new Set(pieces.map((p) => p.date))]).toEqual(['2026-10-14', '2026-10-15']);
+    expect(sec(pieces)).toBe(180);
+  });
+});
+
+describe('心跳落库（ADR-0014）', () => {
+  it('落库线停在 now − idle 阈值；实时读数补上余量', () => {
+    const { pieces, state } = run([act(1, 'https://drift.test/', s(0)), ...heartbeats(30, 300)]);
+    expect(sec(pieces)).toBe(180);
+    expect(new Set(pieces.map((p) => p.segId)).size).toBe(1);
+    expect(liveSeconds(state, s(300))).toBe(120);
+  });
+
+  it('合盖休眠后先到 idle→active：空窗不计入，从唤醒时刻重开', () => {
+    const { pieces, state } = run([
+      act(1, 'https://drift.test/', s(0)),
+      hb(s(30)),
+      { type: 'idle-changed', state: 'active', at: s(3600) },
+    ]);
+    expect(sec(pieces)).toBe(90);
+    expect(state.current?.startedAt).toBe(s(3600));
+  });
+
+  it('SW 重启后的对账不前移水位', () => {
+    const r = run([act(1, 'https://drift.test/', s(0)), hb(s(30))]);
+    const { pieces } = run(
+      [
+        { type: 'sync', at: s(900), focusedWindowId: 1, idleState: 'active', tabs: [{ windowId: 1, tabId: 1, url: 'https://drift.test/', incognito: false }] },
+        hb(s(930)),
+      ],
+      r.state,
+    );
+    expect(sec([...r.pieces, ...pieces])).toBe(90);
+  });
+
+  it('心跳断档（SW 被杀 / 休眠）：按水位 + 宽限截断，然后重开', () => {
+    const { pieces, state } = run([act(1, 'https://drift.test/', s(0)), hb(s(30)), hb(s(600))]);
+    expect(sec(pieces)).toBe(90); // 水位 30 + 宽限 60
+    expect(state.current?.startedAt).toBe(s(600));
+  });
+});
+
+describe('idle 与媒体证据', () => {
+  it('无媒体：idle 关段并回溯一个阈值，已落库部分不重复', () => {
+    const { pieces, state } = run([
+      act(1, 'https://drift.test/', s(0)),
+      ...heartbeats(30, 180),
+      { type: 'idle-changed', state: 'idle', at: s(200) },
+    ]);
+    expect(sec(pieces)).toBe(80);
+    expect(state.current).toBeNull();
+  });
+
+  it('标签页在出声：idle 不停表，声音停止时关段', () => {
+    const { pieces, state } = run([
+      act(1, 'https://drift.test/live', s(0), { audible: true }),
+      ...heartbeats(30, 120),
+      { type: 'idle-changed', state: 'idle', at: s(130) },
+      ...heartbeats(150, 900),
+      upd(1, 'https://drift.test/live', s(910), { audible: false }),
+    ]);
+    expect(state.current).toBeNull();
+    expect(sec(pieces)).toBe(910);
+  });
+
+  it('content 报告视频在播（静音也算）：idle 不停表', () => {
     const { state } = run([
-      act(1, 100, TW, T0),
-      { type: 'idle-changed', state: 'idle', at: T0 + 60_000 },
-      { type: 'idle-changed', state: 'active', at: T0 + 600_000 },
+      act(1, 'https://drift.test/v', s(0)),
+      { type: 'page', tabId: 1, page: { url: 'https://drift.test/v', mediaPlaying: true }, at: s(5) },
+      { type: 'idle-changed', state: 'idle', at: s(130) },
     ]);
-    expect(state.current).toMatchObject({ tabId: 1, url: TW, startedAt: T0 + 600_000 });
+    expect(state.current?.tabId).toBe(1);
   });
 
-  it('E6 全窗口失焦：段以 blur 关闭；失焦期间不产段', () => {
-    const { state, closed } = run([
-      act(1, 100, TW, T0),
-      { type: 'window-focus', windowId: -1, at: T0 + 60_000 },
-    ]);
-    expect(closed[0]!.endReason).toBe('blur');
-    expect(state.current).toBeNull();
-    // 失焦期间的心跳不应产生任何段
-    const after = run([hb(T0 + 120_000)], mkDeps(), { ...state, lastActiveAt: T0 + 60_000 });
-    expect(after.closed).toHaveLength(0);
-    expect(after.state.current).toBeNull();
-  });
-
-  it('E7 关闭 active tab：段闭合', () => {
-    const { state, closed } = run([
-      act(1, 100, TW, T0),
-      { type: 'tab-removed', tabId: 1, at: T0 + 50_000 },
-    ]);
-    expect(closed).toHaveLength(1);
-    expect(closed[0]!.end).toBe(T0 + 50_000);
-    expect(state.current).toBeNull();
-  });
-
-  it('E8 同 tab URL 变化：换段并重新分类', () => {
-    const { state, closed } = run([
-      act(1, 100, TW, T0),
-      hb(T0 + 30_000),
-      upd(1, 100, GH, T0 + 60_000),
-    ]);
-    expect(closed).toHaveLength(1);
-    expect(closed[0]!.url).toBe(TW);
-    expect(state.current).toMatchObject({ url: GH, startedAt: T0 + 60_000 });
-  });
-
-  it('E9 浏览器重启残留段：按水位截断入库后不再重开（等 sync 决定）', () => {
-    const dirty: TrackerState = {
-      focusedWindowId: 100,
-      activeTabs: { 100: { tabId: 1, url: TW, incognito: false } },
-      current: {
-        windowId: 100,
-        tabId: 1,
-        url: TW,
-        host: 'twitter.com',
-        incognito: false,
-        categoryId: 'entertainment',
-        startedAt: T0,
-      },
-      lastActiveAt: T0 + 30_000,
-      idleState: 'active',
-    };
-    const { state, closed } = run([{ type: 'startup', at: T0 + 600_000 }], mkDeps(), dirty);
-    expect(closed).toHaveLength(1);
-    expect(closed[0]!.end).toBe(T0 + 90_000);
-    expect(closed[0]!.endReason).toBe('cap');
-    expect(state.current).toBeNull();
-  });
-
-  it('E10 零长段：开段同刻关段，不写库', () => {
-    const { closed } = run([
-      act(1, 100, TW, T0),
-      { type: 'idle-changed', state: 'idle', at: T0 },
-    ]);
-    expect(closed).toHaveLength(0);
-  });
-
-  it('E11 无段心跳：水位不动、无段产生', () => {
-    const { state, closed } = run([hb(T0 + 5_000)]);
-    expect(state.lastActiveAt).toBe(0);
-    expect(closed).toHaveLength(0);
-    expect(state.current).toBeNull();
-  });
-
-  it('E12 跨 dayCutoff：一段拆两条，date 各归其日（不变量 3）', () => {
-    const nextDay = (h: number, m = 0) => new Date(2026, 8, 7, h, m, 0, 0).getTime();
-    const events: TrackerEvent[] = [act(1, 100, TW, localTs(23, 58))];
-    for (let i = 1; i <= 9; i++) events.push(hb(localTs(23, 58) + i * 30_000));
-    events.push({ type: 'idle-changed', state: 'idle', at: nextDay(0, 3) });
-    const { closed } = run(events);
-    expect(closed).toHaveLength(2);
-    expect(closed[0]).toMatchObject({ date: '2026-09-06', end: nextDay(0) });
-    expect(closed[1]).toMatchObject({ date: '2026-09-07', start: nextDay(0), end: nextDay(0, 3) });
-  });
-
-  it('E13 跨窗口切换：旧窗口段 blur 关闭，新窗口 active tab 开段', () => {
-    const { state, closed } = run([act(1, 100, TW, T0), act(2, 200, GH, T0 + 45_000)]);
-    expect(closed).toHaveLength(1);
-    expect(closed[0]!.endReason).toBe('blur');
-    expect(state.current).toMatchObject({ windowId: 200, tabId: 2 });
-  });
-
-  it('E14 sync 冷启动对账：聚焦窗口的 active tab 立即开段', () => {
+  it('页面信号 URL 不匹配时失效（SPA 跳走后旧信号不算）', () => {
     const { state } = run([
-      {
-        type: 'sync',
-        at: T0,
-        focusedWindowId: 100,
-        idleState: 'active',
-        tabs: [
-          { windowId: 100, tabId: 1, url: TW, incognito: false },
-          { windowId: 200, tabId: 2, url: GH, incognito: false },
-        ],
-      },
-    ]);
-    expect(state.current).toMatchObject({ windowId: 100, tabId: 1, categoryId: 'entertainment' });
-    expect(state.activeTabs[200]).toMatchObject({ tabId: 2 });
-  });
-
-  it('E15 chrome:// 等不可追踪 URL 不产生段，但记账正常', () => {
-    const { state, closed } = run([act(1, 100, 'chrome://newtab', T0)]);
-    expect(closed).toHaveLength(0);
-    expect(state.current).toBeNull();
-    expect(state.focusedWindowId).toBe(100);
-  });
-
-  it('E16 隐身标签页照常计时并带 incognito 标记（PRODUCT.md §3.7）', () => {
-    const { state } = run([act(1, 100, TW, T0, true)]);
-    expect(state.current).toMatchObject({ incognito: true, categoryId: 'entertainment' });
-  });
-
-  it('E17 新 tab 加载完成（tab-updated）：聚焦窗口的 active tab 要开段（E2E 冒烟发现的缺口）', () => {
-    // 新建 tab 激活瞬间是 about:blank（不可追踪），导航完成后靠 tab-updated 开段
-    const { state, closed } = run([
-      act(1, 100, 'about:blank', T0),
-      upd(1, 100, GH, T0 + 20_000),
-      hb(T0 + 50_000),
-      upd(1, 100, 'https://www.iana.org/', T0 + 80_000),
-    ]);
-    expect(closed).toHaveLength(1);
-    expect(closed[0]).toMatchObject({ url: GH, start: T0 + 20_000, end: T0 + 80_000 });
-    expect(state.current).toMatchObject({ url: 'https://www.iana.org/', startedAt: T0 + 80_000 });
-  });
-
-  it('E18 后台 tab 的 tab-updated 不开段', () => {
-    const { state } = run([
-      act(1, 100, GH, T0),
-      { type: 'tab-updated', windowId: 200, tabId: 2, url: TW, incognito: false, at: T0 + 10_000 },
-    ]);
-    expect(state.current).toMatchObject({ windowId: 100, tabId: 1 });
-  });
-
-  it('E19 idle 状态下后台自动刷新不误开段（idleState 门禁）', () => {
-    const { state } = run([
-      act(1, 100, GH, T0),
-      { type: 'idle-changed', state: 'idle', at: T0 + 60_000 },
-      { type: 'tab-updated', windowId: 100, tabId: 1, url: TW, incognito: false, at: T0 + 120_000 },
+      act(1, 'https://drift.test/v', s(0)),
+      { type: 'page', tabId: 1, page: { url: 'https://drift.test/v', mediaPlaying: true }, at: s(5) },
+      upd(1, 'https://drift.test/other', s(10)),
+      { type: 'idle-changed', state: 'idle', at: s(130) },
     ]);
     expect(state.current).toBeNull();
-    expect(state.idleState).toBe('idle');
   });
 
-  it('E20 tab-updated 为未见过的 tab 补建记账（SW 早启动丢事件后的自愈）', () => {
-    const { state } = run([
-      { type: 'window-focus', windowId: 300, at: T0 },
-      { type: 'tab-updated', windowId: 300, tabId: 9, url: TW, incognito: false, at: T0 + 10_000 },
+  it('锁屏一律停表（即使在出声）', () => {
+    const { pieces, state } = run([
+      act(1, 'https://drift.test/live', s(0), { audible: true }),
+      { type: 'idle-changed', state: 'locked', at: s(40) },
     ]);
-    expect(state.activeTabs[300]).toMatchObject({ tabId: 9, url: TW });
-    expect(state.current).toMatchObject({ windowId: 300, tabId: 9, startedAt: T0 + 10_000 });
+    expect(state.current).toBeNull();
+    expect(sec(pieces)).toBe(40);
   });
 
-  it('状态不可变：step 不修改传入的 prev', () => {
-    const prev = initialState();
-    const before = JSON.stringify(prev);
-    step(prev, act(1, 100, TW, T0), mkDeps());
-    expect(JSON.stringify(prev)).toBe(before);
+  it('idle 恢复 active 时重开', () => {
+    const { state } = run([
+      act(1, 'https://drift.test/', s(0)),
+      { type: 'idle-changed', state: 'idle', at: s(130) },
+      { type: 'idle-changed', state: 'active', at: s(500) },
+    ]);
+    expect(state.current?.startedAt).toBe(s(500));
+  });
+});
+
+describe('分类变化在同一页面上生效', () => {
+  it('频道信号到达：B 站德语 UP 主 → 当场改判为德语', () => {
+    const url = 'https://www.bilibili.com/video/BV1';
+    const { pieces, state } = run([
+      act(1, url, s(0)),
+      { type: 'page', tabId: 1, page: { url, channel: { platform: 'bilibili', id: '123', name: '德语老师' } }, at: s(8) },
+    ]);
+    expect(pieces).toEqual([expect.objectContaining({ category: 'drift', end: s(8) })]);
+    expect(state.current).toMatchObject({ category: 'german', source: 'channel' });
+  });
+
+  it('未知频道：类别不变，不切段，只记下频道', () => {
+    const url = 'https://www.bilibili.com/video/BV2';
+    const { pieces, state } = run([
+      act(1, url, s(0)),
+      { type: 'page', tabId: 1, page: { url, channel: { platform: 'bilibili', id: '999', name: '游戏区' } }, at: s(8) },
+    ]);
+    expect(pieces).toHaveLength(0);
+    expect(state.current?.channel?.id).toBe('999');
+  });
+
+  it('手动改判只作用于该标签的该 URL', () => {
+    const { pieces, state } = run([
+      act(1, 'https://drift.test/a', s(0)),
+      { type: 'override', override: { tabId: 1, url: 'https://drift.test/a', category: 'german' }, at: s(10) },
+      upd(1, 'https://drift.test/b', s(20)),
+    ]);
+    expect(pieces.map((p) => [p.category, p.source])).toEqual([
+      ['drift', 'rule'],
+      ['german', 'manual'],
+    ]);
+    expect(state.current?.category).toBe('drift');
   });
 });

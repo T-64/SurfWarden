@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { dateKey, nextDayBoundary, splitByDay } from '../src/shared/datetime';
+import { addDays, dateKey, dayRange, lastNDates, logicalDayAt, nextDayBoundary, splitByDay } from '../src/shared/datetime';
+import { clockHM, formatMin, hhmm, mmss } from '../src/shared/format';
 
 /** 本地时区安全的固定时刻构造（测试结果与运行环境时区无关） */
 function localTs(y: number, m: number, d: number, h: number, min = 0, s = 0): number {
@@ -67,5 +68,33 @@ describe('splitByDay', () => {
   it('start==end 返回空，start>end 返回空（防御）', () => {
     expect(splitByDay(E12_23_58, E12_23_58, 0)).toEqual([]);
     expect(splitByDay(E12_00_03, E12_23_58, 0)).toEqual([]);
+  });
+});
+
+describe('v3 日历工具', () => {
+  it('addDays / lastNDates 跨月', () => {
+    expect(addDays('2026-10-31', 1)).toBe('2026-11-01');
+    expect(addDays('2026-03-01', -1)).toBe('2026-02-28');
+    expect(lastNDates('2026-10-02', 3)).toEqual(['2026-09-30', '2026-10-01', '2026-10-02']);
+  });
+
+  it('logicalDayAt：早于 cutoff 的时刻落在次日凌晨', () => {
+    expect(logicalDayAt('2026-10-14', 23 * 60, 5)).toBe(new Date(2026, 9, 14, 23, 0).getTime());
+    expect(logicalDayAt('2026-10-14', 30, 5)).toBe(new Date(2026, 9, 15, 0, 30).getTime());
+  });
+
+  it('dayRange：[当日 cutoff, 次日 cutoff)', () => {
+    expect(dayRange('2026-10-14', 5)).toEqual([new Date(2026, 9, 14, 5).getTime(), new Date(2026, 9, 15, 5).getTime()]);
+  });
+});
+
+describe('format', () => {
+  it('formatMin / clockHM / mmss / hhmm', () => {
+    expect(formatMin(0)).toBe('0 分钟');
+    expect(formatMin(30)).toBe('<1 分钟');
+    expect(formatMin(125 * 60)).toBe('2 小时 5 分');
+    expect(clockHM(95 * 60_000)).toBe('1:35');
+    expect(mmss(61_500)).toBe('1:01');
+    expect(hhmm(new Date(2026, 9, 14, 7, 5).getTime())).toBe('07:05');
   });
 });

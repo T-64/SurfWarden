@@ -1,0 +1,40 @@
+body { margin: 0; }
+.pop { width: 360px; padding: 18px 18px 14px; display: flex; flex-direction: column; gap: 16px; }
+
+.pop-head { display: flex; justify-content: space-between; align-items: baseline; }
+.wordmark { font: 600 15px/1 var(--serif); color: var(--ink); letter-spacing: 0.02em; }
+.phase { font: 500 12px/1 var(--sans); color: var(--mute); }
+.phase.warn { color: var(--warn); }
+.phase.night { color: var(--nightfall); }
+
+.hero { display: flex; flex-direction: column; gap: 8px; }
+.hero-num { display: flex; align-items: baseline; gap: 8px; }
+.hero-num .big { font-size: 52px; line-height: 0.95; font-weight: 500; }
+.hero-num .unit { color: var(--mute); font-size: 13px; }
+.hero-num .done { margin-left: auto; font: 600 11px/1 var(--sans); letter-spacing: 0.12em; color: var(--c-german); }
+.hero .clock { font-size: 56px; line-height: 1; font-weight: 400; color: var(--moon, var(--ink)); }
+.hero-sub { margin: 0; font: 500 16px/1.4 var(--serif); color: var(--ink); }
+
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.stat { display: flex; flex-direction: column; gap: 4px; padding: 10px 0 10px 12px; border-left: 1px solid var(--line); }
+.stat:first-child { border-left: 0; padding-left: 0; }
+.stat .v { font-size: 20px; }
+.stat .v.over { color: var(--warn); }
+.stat .u { font-size: 11.5px; color: var(--mute); }
+
+.page { padding: 14px 14px 16px; }
+.page-head { display: flex; align-items: center; gap: 8px; }
+.page-head .host { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-weight: 600; font-size: 13.5px; }
+.page-head .src { font-size: 11.5px; color: var(--mute); flex: none; }
+.lab { margin: 14px 0 7px; }
+.page .sw-seg button { font-size: 12px; gap: 4px; }
+.page .sw-seg .sw-dot { width: 6px; height: 6px; }
+
+.wide { width: 100%; }
+.notice {
+  appearance: none; text-align: left; cursor: pointer; border: 1px dashed var(--line-strong); background: transparent;
+  border-radius: var(--r-m); padding: 10px 12px; font: 12.5px/1.5 var(--sans); color: var(--warn);
+}
+.notice u { text-underline-offset: 3px; }
+.pop-foot { display: flex; gap: 14px; align-items: center; }
+.pop-foot .ver { margin-left: auto; font: 11px var(--mono); color: var(--faint); }

@@ -1,59 +1,70 @@
-# SurfWarden（冲浪监督）
+# SurfWarden
 
-本地优先的浏览器插件：自动记录你每天在什么网页上花了多少时间，用**内容级规则**区分"刷 B 站"和"B 站学德语"，并通过预算、提醒、引导页监督你——**拦下走神之后，把你带回去该去的地方**。
+一个只在本机运行的浏览器扩展，帮我做三件事：
 
-> v2.0 = 「哨站 OpsDeck」设计系统 + 站点情报 + 报告洞察 + 专注模式。五轮迭代全过程见 [docs/iterations/](docs/iterations/) 与 [docs/images/](docs/images/)。
+1. **晚上按时下线**：22:30 关掉娱乐站，23:00 起宵禁到 07:30，只留下白名单站点。
+2. **把漫无目的刷 B 站直播、刷 X 视频的时间换成学德语**：白天打开娱乐站要先说清楚"想干嘛、看几分钟"，到点就拦，主按钮直接带你回到上次的 Nicos Weg。
+3. **私密网站先冷静一下**：打开成人网站时，先出现 3 分钟冷静期，建议你离开屏幕去洗把冷水脸、做几个俯卧撑。回来还想看可以进，一天一次。不评判频率，也不在任何地方显示网址。
 
-## 特性（v2.0.0）
+另外，它会如实记录网页时间花在了哪里，包括每晚最后一次上网是几点。
 
-- ⏱ **准确计时**：active tab + 系统 idle/锁屏检测；MV3 后台休眠不虚增（心跳水位 + 宽限截断，ADR-0003）；隐身窗口照常统计
-- 🧭 **内容级规则**：域名 / 路径通配 / 完整 URL / 正则，更具体的规则永远赢——`live.bilibili.com → 娱乐` 与 `B站德语课 → 学习` 共存
-- 🧠 **站点情报**：内置 61 常用站目录（组/标签先验），未分类站点在 popup 一键采纳为规则（ADR-0011）
-- 🎯 **预算监督**：类别预算 → 80% 横幅（带进度读数）→ 超额重定向到引导页（"去学习"主按钮一键跳回课程）
-- 🪙 **豁免机制**：引导页"再来 5 分钟"，每天限次，如实计入数据
-- 🎯 **专注模式**：30/45/60 分钟封锁全部可监督类别，专注期禁豁免、横幅静默
-- 📊 **OpsDeck 报告**：7 日堆叠趋势、类别构成、TOP 站点、小时分布、学习 : 娱乐比值、学习连续天数、今日 vs 周均值
-- 🎨 **个性外观**：哨站暗色设计系统（表面阶梯/发丝线/等宽仪表读数/键帽徽章/点阵雷达背景）+ 四套主题强调色
-- 🔒 **全本地**：零网络请求、无账号；数据只在 IndexedDB + chrome.storage，支持 JSON 导出
+界面跟着作息变：白天是暖白纸面配宋体，收尾和宵禁时变成深夜蓝和月光色（ADR-0015）。
 
-## 安装（自用，无需上架）
+> v3.0.0 是一次重写，详见 [ADR-0012](docs/adr/ADR-0012-v3-repositioning.md)。v2 的文档在 [docs/archive/v2/](docs/archive/v2/)。
+
+## 它怎么工作
+
+| 时段（可改） | 娱乐站（B 站、X、YouTube 等） | 其他网页 |
+|---|---|---|
+| 白天 07:30–22:30 | 意图闸门：写意图、选 5/10/20 分钟，每次等待逐次加长（5→60 秒）；每天总额 60 分钟 | 放行 |
+| 收尾 22:30–23:00 | 拦截 | 放行，右下角显示"离上床 N 分钟" |
+| 宵禁 23:00–07:30 | 拦截 | 只放行德语、学业类和白名单站点；每晚可写理由延长 1 次，每次 10 分钟 |
+
+私密站点：白天先冷静 3 分钟，再决定进不进（进入后 20 分钟，每天 1 次）；收尾和宵禁期间一律拦截。
+
+- **按内容分类，而不是按域名一刀切。** B 站和 YouTube 视频页会读取 UP 主或频道。第一次遇到某个 UP 主会问"这是德语学习吗？"，回答会被记住。已经预置了 B 站「德国百科DEPedia」（搬运了 Nicos Weg）和 YouTube「Easy German」。
+- **计时尽量真实。**
+  - 只计聚焦窗口里当前标签页的时间。
+  - 看视频不碰鼠标也照常计时；锁屏就停表。
+  - 合盖休眠的那段空窗不会被算进去。
+- **报告页：** 每晚最后上网时间对比 23:00、德语每日分钟数和连续达标天数、一天的 24 小时时间线、意图日志（"说要看 10 分钟，实际看了多久"）、宵禁延长的理由。
+- **只在本地：** 零网络请求，不需要账号。数据存在 IndexedDB 和 chrome.storage 里，可以导出为 JSON。
+- **只覆盖这台电脑的浏览器，** 手机上的使用不在统计里。
+
+## 安装
 
 ```bash
 npm install
-npm run build          # 产出 .output/chrome-mv3
+npm run build
 ```
 
-Chrome/Edge → 扩展管理 → 开发者模式 → 加载已解压的扩展 → 选 `.output/chrome-mv3` 目录。
+然后在 Chrome 或 Edge 里加载：
 
-> 开发模式：`npm run dev` 自动打开浏览器并热更新。
-
-## 首次使用
-
-1. 扩展管理页 → SurfWarden → 详情 → 打开**允许隐身模式**
-2. 点扩展图标看今日统计；设置页（详情页 → 扩展程序 → 详细信息里，或 popup 右上角）配置规则/预算/学习目标
-3. 种子规则已内置常见站点（Twitter/B站/YouTube/直播站 → 娱乐；Coursera/LeetCode → 学习）
+1. 打开扩展管理页，开启"开发者模式"。
+2. 点"加载已解压的扩展"，选择 `.output/chrome-mv3`。
+3. 打开扩展详情，开启"**允许在隐身模式下运行**"。不开的话，隐身窗口就是后门。
 
 ## 开发
 
 ```bash
-npm run compile       # 类型检查（wxt prepare + tsc）
-npm test              # vitest 单测（core 层行覆盖 >94%）
-npm run build         # 生产构建
-npm run smoke         # 真机冒烟（Edge，需本机装 Microsoft Edge）
-npm run e2e:block     # E2E：预算→引导页→豁免→放行 全链路
-npm run check:privacy # 隐私红线：源码零网络 API
+npm run compile        # 类型检查
+npm test               # 单测（core 层行覆盖约 96%）
+npm run build          # 构建
+npm run e2e            # 真机 E2E：本机 Edge + 本地站点，不访问外网
+npm run check:privacy  # 隐私红线：源码不含网络 API
+node e2e/shoot.mjs     # 用演示数据生成文档截图
 ```
 
-## 文档
+文档入口：[产品方案](docs/PRODUCT.md) · [架构](docs/design/architecture.md) · [开发流程](docs/dev-process.md) · [ADR](docs/adr/)
 
-- [产品方案](docs/PRODUCT.md)（定位/概念模型/功能清单/里程碑）
-- [开发流程约束](docs/dev-process.md)（分层/门禁/提交纪律）
-- [架构设计](docs/design/architecture.md) / [数据模型](docs/design/data-model.md) / [关键算法](docs/design/key-algorithms.md)
-- [实施计划](docs/implementation-plan.md) 与 [ADR 决策记录](docs/adr/)（0001–0009，含迭代与修订史）
-- [权威参考笔记](docs/references.md)（WXT / Playwright / DNR / Dexie 查证结论）
+## 截图
 
-## 隐私
+| 意图闸门 | 私密 · 冷静期 | 宵禁 |
+|---|---|---|
+| ![](docs/images/v3-gate.png) | ![](docs/images/v3-cooldown.png) | ![](docs/images/v3-curfew.png) |
 
-- 除浏览器本地存储外**零网络请求**（`npm run check:privacy` 是发布门禁的一部分）
-- 隐身窗口数据同样只存本机——这是本插件的设计目的（监督自己的隐身浏览），开启授权时会明确提示
-- 卸载扩展即删除全部数据（数据都在扩展自己的存储里）
+| Popup · 白天 | Popup · 夜里 |
+|---|---|
+| ![](docs/images/v3-popup.png) | ![](docs/images/v3-popup-night.png) |
+
+![报告](docs/images/v3-report.png)

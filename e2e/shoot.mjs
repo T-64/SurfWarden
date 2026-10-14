@@ -1,145 +1,176 @@
 /**
- * UI 截图工具：加载构建产物，为 popup / options / guide / dashboard 截图到 docs/images/。
- * 用法：npm run build && node e2e/shoot.mjs [前缀]
- * 例：node e2e/shoot.mjs baseline-  → docs/images/baseline-popup.png
+ * 文档截图：灌 14 天演示数据 → 截 popup / report / options（遮罩截图由 SHOTS=… npm run e2e 产出）。
+ * 用法：npm run build && node e2e/shoot.mjs [输出目录，默认 docs/images]
+ * 演示数据只写进临时 profile，不碰真实浏览器。
  */
+import http from 'node:http';
+import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
 import { chromium } from 'playwright';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url)); // e2e/
-const PROJ = path.resolve(HERE, '..'); // 项目根，与 cwd 无关
+const OUT = path.resolve(process.argv[2] ?? 'docs/images');
+fs.mkdirSync(OUT, { recursive: true });
 
-const PREFIX = process.argv[2] ?? '';
+const server = http.createServer((req, res) => {
+  res.setHeader('content-type', 'text/html; charset=utf-8');
+  res.end('<title>live</title><h1>直播间</h1>');
+});
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const PORT = server.address().port;
 
-try {
-  const out = execSync('pgrep -f "e2e-profile" || true').toString().trim();
-  if (out) {
-    execSync(`kill ${out.split('\n').join(' ')}`);
-    await new Promise((r) => setTimeout(r, 1_000));
-  }
-} catch { /* 忽略 */ }
-
-const pathToExtension = path.join(PROJ, '.output/chrome-mv3');
-const userDataDir = path.join(PROJ, `.output/e2e-profile-${Date.now()}`);
-const outDir = path.join(PROJ, 'docs/images');
-execSync(`mkdir -p "${outDir}"`);
-
-const ctx = await chromium.launchPersistentContext(userDataDir, {
-  channel: 'msedge',
-  headless: false,
-  args: [
-    `--disable-extensions-except=${pathToExtension}`,
-    `--load-extension=${pathToExtension}`,
-    '--no-first-run',
-    '--no-default-browser-check',
-  ],
+const ext = path.resolve('.output/chrome-mv3');
+const profile = fs.mkdtempSync(path.resolve('.output/shoot-profile-'));
+const ctx = await chromium.launchPersistentContext(profile, {
+  channel: process.env.E2E_CHANNEL ?? 'msedge',
+  headless: true,
+  args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`, '--host-resolver-rules=MAP *.test 127.0.0.1'],
 });
 let [sw] = ctx.serviceWorkers();
 if (!sw) sw = await ctx.waitForEvent('serviceworker', { timeout: 20_000 });
-const extensionId = sw.url().split('/')[2];
-
-/** 给扩展预置一点演示数据，让截图有真实感 */
-async function seedDemoData() {
-  const page = await ctx.newPage();
-  await page.goto(`chrome-extension://${extensionId}/options.html`);
-  await page.evaluate(async () => {
-    const { dateKey } = await import(chrome.runtime.getURL('shared/datetime.js')).catch(() => ({}));
-    void dateKey;
-    // 直接操作 IndexedDB 写入今日演示用量
-    function put(db, store, value) {
-      return new Promise((res, rej) => {
-        const tx = db.transaction(store, 'readwrite');
-        tx.objectStore(store).put(value);
-        tx.oncomplete = res;
-        tx.onerror = rej;
-      });
-    }
-    const db = await new Promise((res, rej) => {
-      const o = indexedDB.open('SurfWardenDB');
-      o.onsuccess = () => res(o.result);
-      o.onerror = rej;
-    });
-    const today = new Date();
-    const key = (offsetDays) => {
-      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - offsetDays);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    };
-    // 7 天历史（第 3 天无学习 → 演示 streak 断点前的连续；今日另外叠加明细行）
-    const rows = [];
-    const hist = [
-      { learning: 1800, entertainment: 3600, work: 7200 },
-      { learning: 2400, entertainment: 1800, work: 6600 },
-      { learning: 0, entertainment: 4500, work: 5400 },
-      { learning: 3000, entertainment: 900, work: 7800 },
-      { learning: 2700, entertainment: 3000, work: 6000 },
-      { learning: 3600, entertainment: 2700, work: 7200 },
-      { learning: 1200, entertainment: 4200, work: 4800 },
-    ];
-    hist.forEach((h, i) => {
-      const d = key(6 - i);
-      if (h.learning) rows.push({ date: d, categoryId: 'learning', host: 'www.bilibili.com', seconds: h.learning, visits: 3 });
-      if (h.entertainment) rows.push({ date: d, categoryId: 'entertainment', host: 'twitter.com', seconds: h.entertainment, visits: 6 });
-      if (h.work) rows.push({ date: d, categoryId: 'work', host: 'github.com', seconds: h.work, visits: 9 });
-    });
-    rows.push(
-      { date: key(0), categoryId: 'neutral', host: 'www.google.com', seconds: 360, visits: 6 },
-      { date: key(0), categoryId: 'neutral', host: 'stackoverflow.com', seconds: 900, visits: 3 },
-    );
-    // 今日 sessions（小时分布图数据源）：9/10/14/15/20/21 时各一段
-    const dayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-    const mk = (h, m, minutes, cat, host, url) => ({
-      start: dayStart + (h * 60 + m) * 60_000,
-      end: dayStart + (h * 60 + m + minutes) * 60_000,
-      date: key(0), host, url, categoryId: cat, incognito: false, endReason: 'event',
-    });
-    const sessions = [
-      mk(9, 15, 45, 'work', 'github.com', 'https://github.com/'),
-      mk(10, 30, 35, 'learning', 'www.bilibili.com', 'https://www.bilibili.com/video/BV1'),
-      mk(14, 0, 28, 'entertainment', 'twitter.com', 'https://twitter.com/'),
-      mk(15, 20, 36, 'entertainment', 'live.bilibili.com', 'https://live.bilibili.com/1'),
-      mk(20, 5, 50, 'learning', 'www.bilibili.com', 'https://www.bilibili.com/video/BV2'),
-      mk(21, 30, 22, 'entertainment', 'twitter.com', 'https://twitter.com/'),
-    ];
-    for (const r of rows) await put(db, 'usageDaily', r);
-    for (const s of sessions) await put(db, 'sessions', s);
-    db.close();
-    // 专注模式演示状态（IT4）
-    await chrome.storage.local.set({
-      settings: {
-        dayCutoffHour: 0, idleGraceSec: 60, idleThresholdSec: 3600,
-        exemptPerDay: 2, exemptMinutes: 5,
-        focusUntil: Date.now() + 22 * 60_000,
-      },
-    });
+const extId = sw.url().split('/')[2];
+await new Promise((r) => setTimeout(r, 1000));
+await sw.evaluate(async () => {
+  const { settings } = await chrome.storage.local.get('settings');
+  const { rules } = await chrome.storage.local.get('rules');
+  await chrome.storage.local.set({
+    settings: { ...settings, idleThresholdSec: 3600 },
+    rules: [...rules, { id: 'demo', pattern: 'live.test', category: 'drift', createdAt: 999 }],
+    lastGerman: { url: 'https://learngerman.dw.com/de/nicos-weg/c-36519687', title: 'Nicos Weg · Folge 12', at: Date.now() },
   });
-  await page.close();
-}
+});
 
-const shots = [
-  // ?demo=1：popup 的演示钩子（正常工具栏弹窗无 query）——截图环境中 popup 是标签页而非覆盖层，
-  // active tab 会变成 popup 自己导致 current 为空，demo 参数补上真实使用时的观感
-  { file: `${PREFIX}popup.png`, url: `chrome-extension://${extensionId}/popup.html?demo=1`, w: 380, h: 720 },
-  {
-    file: `${PREFIX}guide.png`,
-    url: `chrome-extension://${extensionId}/guide.html?cat=entertainment&url=${encodeURIComponent('https://twitter.com/')}`,
-    w: 960,
-    h: 800,
-  },
-  { file: `${PREFIX}options.png`, url: `chrome-extension://${extensionId}/options.html`, w: 1000, h: 1400 },
-  { file: `${PREFIX}dashboard.png`, url: `chrome-extension://${extensionId}/dashboard.html`, w: 1180, h: 1100 },
+// ---------- 演示数据 ----------
+const CUT = 5;
+const dk = (ts) => {
+  const d = new Date(ts - CUT * 3_600_000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const today = dk(Date.now());
+const [Y, M, D] = today.split('-').map(Number);
+const at = (dayOffset, h, m) => new Date(Y, M - 1, D + dayOffset + (h < CUT ? 1 : 0), h, m).getTime();
+const german = [20, 45, 50, 0, 30, 60, 45, 15, 50, 55, 40, 47, 52, 38];
+const drift = [80, 60, 40, 95, 70, 45, 30, 65, 20, 25, 35, 50, 30, 65];
+const study = [180, 210, 150, 90, 200, 240, 60, 30, 220, 190, 210, 170, 200, 150];
+const nights = [[23, 40], [0, 55], [23, 10], [22, 58], [1, 20], [23, 5], [22, 45], [22, 52], [23, 30], [22, 40], [22, 55], [23, 15], [22, 50]];
+const mornings = [[8, 40], [9, 10], [7, 55], [7, 40], [8, 5], [9, 20], [7, 35], [7, 45], [7, 50], [7, 30], [7, 40], [7, 50], [7, 35], [7, 45]];
+const usage = [];
+const days = [];
+for (let i = 0; i < 14; i++) {
+  const off = i - 13;
+  const date = dk(at(off, 12, 0));
+  usage.push(
+    { date, category: 'german', host: 'learngerman.dw.com', seconds: german[i] * 45 },
+    { date, category: 'german', host: 'www.bilibili.com', seconds: german[i] * 15 },
+    { date, category: 'drift', host: 'live.bilibili.com', seconds: drift[i] * 40 },
+    { date, category: 'drift', host: 'x.com', seconds: drift[i] * 20 },
+    { date, category: 'study', host: 'github.com', seconds: study[i] * 30 },
+    { date, category: 'study', host: 'ilias3.uni-stuttgart.de', seconds: study[i] * 30 },
+    { date, category: 'other', host: 'www.google.com', seconds: 1500 },
+    ...(i % 4 === 1 ? [{ date, category: 'private', host: 'example-private.test', seconds: 900 }] : []),
+  );
+  if (i < 13) days.push({ date, firstAt: at(off, ...mornings[i]), lastAt: at(off, ...nights[i]) });
+  else days.push({ date, firstAt: at(off, ...mornings[i]), lastAt: Date.now() });
+}
+const blocks = [
+  [8, 10, 8, 40, 'other', 'www.google.com'],
+  [9, 0, 11, 30, 'study', 'ilias3.uni-stuttgart.de'],
+  [12, 10, 12, 50, 'german', 'learngerman.dw.com'],
+  [13, 0, 13, 35, 'drift', 'live.bilibili.com'],
+  [14, 0, 17, 0, 'study', 'github.com'],
+  [16, 30, 16, 38, 'private', 'example-private.test'],
+  [19, 30, 20, 0, 'drift', 'x.com'],
+  [20, 15, 20, 50, 'german', 'www.bilibili.com'],
+];
+const sessions = blocks.map(([h1, m1, h2, m2, category, host], i) => ({
+  id: `demo${i}|${today}`,
+  segId: `demo${i}`,
+  date: today,
+  start: at(0, h1, m1),
+  end: at(0, h2, m2),
+  host,
+  url: `https://${host}/`,
+  category,
+  source: 'rule',
+  incognito: false,
+}));
+const events = [
+  { date: today, at: at(0, 13, 0), type: 'pass', site: 'bilibili.com', intent: '放松一下', minutes: 10 },
+  { date: today, at: at(0, 13, 12), type: 'pass', site: 'bilibili.com', intent: '看一个具体的视频 / 直播', minutes: 20 },
+  { date: today, at: at(0, 19, 30), type: 'pass', site: 'x.com', intent: '查个东西', minutes: 5 },
+  { date: today, at: at(0, 13, 36), type: 'go-german' },
+  { date: today, at: at(0, 16, 40), type: 'private-skip', intent: '用冷水洗把脸' },
+  { date: dk(at(-2, 12, 0)), at: at(-2, 15, 10), type: 'private-skip', intent: '做 15 个俯卧撑' },
+  { date: dk(at(-3, 12, 0)), at: at(-3, 21, 5), type: 'private-pass', intent: '喝杯水，站起来走走', minutes: 20 },
+  { date: dk(at(-5, 12, 0)), at: at(-5, 14, 0), type: 'private-skip', intent: '用冷水洗把脸' },
+  { date: dk(at(-1, 12, 0)), at: at(-1, 23, 20), type: 'curfew-ext', reason: 'Abgabe 明早截止，交作业', minutes: 10, site: 'ilias3.uni-stuttgart.de' },
 ];
 
-await seedDemoData();
-for (const s of shots) {
-  const page = await ctx.newPage();
-  await page.setViewportSize({ width: s.w, height: s.h });
-  await page.goto(s.url);
-  await page.waitForTimeout(1_200);
-  await page.screenshot({ path: path.join(outDir, s.file), fullPage: true });
-  console.log('[shots]', s.file);
-  await page.close();
-}
+const seedPage = await ctx.newPage();
+await seedPage.goto(`chrome-extension://${extId}/report.html`); // Dexie 先建好 schema
+await seedPage.waitForTimeout(800);
+await seedPage.evaluate(
+  (data) =>
+    new Promise((resolve, reject) => {
+      const req = indexedDB.open('SurfWardenV3');
+      req.onsuccess = () => {
+        const tx = req.result.transaction(['usage', 'days', 'sessions', 'events'], 'readwrite');
+        for (const [store, rows] of Object.entries(data)) for (const r of rows) tx.objectStore(store).put(r);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      };
+    }),
+  { usage, days, sessions, events },
+);
+await seedPage.close();
+
+// ---------- 截图 ----------
+const live = await ctx.newPage();
+await live.goto(`http://live.test:${PORT}/`);
+await live.waitForTimeout(1500);
+const liveTabId = await sw.evaluate(async () => (await chrome.tabs.query({ url: '*://live.test/*' }))[0]?.id);
+
+const popup = await ctx.newPage();
+await popup.setViewportSize({ width: 360, height: 720 });
+await popup.goto(`chrome-extension://${extId}/popup.html?tab=${liveTabId}`);
+await popup.waitForTimeout(1200);
+const h = await popup.evaluate(() => document.body.scrollHeight);
+await popup.setViewportSize({ width: 360, height: h });
+await popup.screenshot({ path: path.join(OUT, 'v3-popup.png') });
+
+const report = await ctx.newPage();
+await report.setViewportSize({ width: 1160, height: 900 });
+await report.goto(`chrome-extension://${extId}/report.html`);
+await report.waitForTimeout(1500);
+await report.screenshot({ path: path.join(OUT, 'v3-report.png'), fullPage: true });
+await report.setViewportSize({ width: 390, height: 900 });
+await report.waitForTimeout(500);
+await report.screenshot({ path: path.join(OUT, 'v3-report-narrow.png'), fullPage: true });
+
+const options = await ctx.newPage();
+await options.setViewportSize({ width: 960, height: 900 });
+await options.goto(`chrome-extension://${extId}/options.html`);
+await options.waitForTimeout(1200);
+await options.screenshot({ path: path.join(OUT, 'v3-options.png'), fullPage: true });
+
+// 夜间情绪：把作息摆成"此刻是宵禁"，再截 popup 与报告
+await sw.evaluate(async () => {
+  const d = new Date();
+  const m = d.getHours() * 60 + d.getMinutes();
+  const mod = (x) => ((x % 1440) + 1440) % 1440;
+  const { settings } = await chrome.storage.local.get('settings');
+  await chrome.storage.local.set({ settings: { ...settings, schedule: { windDown: mod(m - 60), bedtime: mod(m - 20), wake: mod(m + 480) } } });
+});
+await popup.waitForTimeout(800);
+await popup.reload();
+await popup.waitForTimeout(1200);
+await popup.setViewportSize({ width: 360, height: await popup.evaluate(() => document.body.scrollHeight) });
+await popup.screenshot({ path: path.join(OUT, 'v3-popup-night.png') });
+await report.setViewportSize({ width: 1160, height: 900 });
+await report.reload();
+await report.waitForTimeout(1500);
+await report.screenshot({ path: path.join(OUT, 'v3-report-night.png'), fullPage: true });
+
 await ctx.close();
-process.exit(0);
+server.close();
+fs.rmSync(profile, { recursive: true, force: true });
+console.log('screenshots →', OUT);
