@@ -43,6 +43,12 @@ export function step(prev: TrackerState, ev: TrackerEvent, deps: TrackerDeps): S
   const graceMs = deps.idleGraceSec * 1000;
   let idleClose = false;
 
+  // ⓪ 证据断档（SW 被杀 / 系统休眠后的第一个事件，不论类型）：先按水位截断，
+  // 否则唤醒后的 idle→active 等事件会前移水位，把空窗算进当前段
+  if (s.current && ev.at - s.lastActiveAt > graceMs + HB_JITTER_MS) {
+    pieces.push(...closeCurrent(s, ev.at, false, deps));
+  }
+
   // ① 记账
   switch (ev.type) {
     case 'tab-activated':
@@ -80,14 +86,10 @@ export function step(prev: TrackerState, ev: TrackerEvent, deps: TrackerDeps): S
       s.override = ev.override;
       break;
     case 'heartbeat':
+      // 断档已在 ⓪ 截断；连续时前移水位并落库
       if (s.current) {
-        if (ev.at - s.lastActiveAt > graceMs + HB_JITTER_MS) {
-          // 证据断裂（SW 被杀 / 系统休眠）：按水位截断，下方对账会重开
-          pieces.push(...closeCurrent(s, ev.at, false, deps));
-        } else {
-          touch(s, ev.at);
-          pieces.push(...flush(s, ev.at, deps));
-        }
+        touch(s, ev.at);
+        pieces.push(...flush(s, ev.at, deps));
       }
       break;
     case 'reclassify':
@@ -97,7 +99,7 @@ export function step(prev: TrackerState, ev: TrackerEvent, deps: TrackerDeps): S
       s.idleState = ev.idleState;
       s.activeTabs = {};
       for (const t of ev.tabs) s.activeTabs[t.windowId] = tabInfo(t);
-      touch(s, ev.at);
+      // 对账不是活动证据：不前移水位（开段时 open() 自会 touch）
       break;
   }
 

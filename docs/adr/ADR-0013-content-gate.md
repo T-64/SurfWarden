@@ -23,7 +23,7 @@ DNR 只能按 `requestDomains` 拦截 main_frame 导航，带来四个问题：
 选 C。
 
 - 判决由 SW 按完整 URL 加频道信号给出，content 只负责渲染。
-- 遮罩挂在 `documentElement` 下的 closed shadow root 里，样式与页面隔离。显示期间锁住滚动，并每秒暂停一次 `video` / `audio`（直播会自动续播）。
+- 遮罩挂在 `documentElement` 下的 shadow root（open）里，样式与页面隔离。用 open 是为了 E2E 能定位到遮罩元素；closed 并不更安全，因为页面脚本总能直接移除宿主元素。显示期间锁住滚动，并每秒暂停一次 `video` / `audio`（直播会自动续播）。
 - 单页应用的跳转靠每秒比较一次 `location.href` 来检测。SW 在状态变化时广播 `policy-changed`，content 另外每 30 秒自己轮询一次作为兜底。
 - 安装或更新扩展时，用 `scripting.executeScript` 给已经打开的标签页补注入。
 

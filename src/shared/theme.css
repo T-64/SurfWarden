@@ -1,7 +1,6 @@
 /**
- * OpsDeck 哨站设计系统 v1（ADR-0010）
- * 骨架：Raycast 式暗色纪律（表面阶梯/发丝线/零阴影/白色主CTA）
- * 个性：语义信号色（绿/琥珀/红）、等宽仪表读数、键帽徽章、点阵网格
+ * 暗色主题令牌（沿用 ADR-0010 的表面阶梯与等宽读数；v3 去掉强调色变体）。
+ * 类别色：德语绿 / 学业蓝 / 娱乐红 / 其他灰；夜间时段用紫。
  */
 
 :root {
@@ -22,6 +21,9 @@
   --green: #3ddc84;
   --amber: #ffb224;
   --red: #ff5c5c;
+  --blue: #57c1ff;
+  --violet: #a99cf8;
+  --gray: #8b929c;
   --green-soft: rgba(61, 220, 132, 0.13);
   --amber-soft: rgba(255, 178, 36, 0.13);
   --red-soft: rgba(255, 92, 92, 0.13);
@@ -32,21 +34,6 @@
   --r-s: 4px;
   --r-m: 8px;
   --r-l: 10px;
-}
-
-/* ---------- 主题强调色变体（IT5）：signal（默认）/ cyan / violet ---------- */
-
-.od-app[data-accent='cyan'] {
-  --green: #4cc9f0;
-  --green-soft: rgba(76, 201, 240, 0.13);
-}
-.od-app[data-accent='violet'] {
-  --green: #a78bfa;
-  --green-soft: rgba(167, 139, 250, 0.13);
-}
-.od-app[data-accent='amber'] {
-  --green: #ffb224;
-  --green-soft: rgba(255, 178, 36, 0.13);
 }
 
 /* ---------- 基座 ---------- */

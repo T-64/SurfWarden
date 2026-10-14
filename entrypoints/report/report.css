@@ -1,0 +1,46 @@
+.rep { min-height: 100vh; max-width: 1120px; margin: 0 auto; padding: 28px 32px 48px; display: flex; flex-direction: column; gap: 16px; box-sizing: border-box; }
+.rep-head { display: flex; justify-content: space-between; align-items: flex-start; }
+.rep-head h1 { margin: 0 0 4px; font: 600 15px/1.2 var(--sans); letter-spacing: 0.1em; color: var(--ink); }
+.rep-head h1 b { color: var(--green); font-weight: 600; }
+.rep-head .od-caption { text-transform: none; letter-spacing: 0.02em; }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid2.inner { margin-top: 14px; gap: 28px; }
+@media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } .rep { padding: 20px 16px 40px; } }
+
+.card { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.card-head h2 { margin: 2px 0 0; font: 600 13px/1.3 var(--sans); color: var(--ink); }
+.tiles { display: flex; gap: 16px; }
+.tile { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.tile .od-caption { letter-spacing: 0.04em; text-transform: none; }
+.tile .od-stat { font-size: 16px; }
+.days { display: flex; gap: 4px; flex-wrap: wrap; }
+.days .on { color: var(--ink); border-color: var(--faint); background: var(--card); }
+
+.chart { width: 100%; height: auto; display: block; overflow: visible; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .ref { stroke: var(--mute); stroke-width: 1; }
+.chart .axis { fill: var(--faint); font: 10px var(--mono); }
+.chart .axis.strong { fill: var(--ink); }
+.chart .ref-label { fill: var(--mute); }
+.chart .val { fill: var(--ink); font: 600 11px var(--mono); }
+.timeline .track { fill: var(--elevated); }
+
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--body); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.sw { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.sub { margin: 0 0 4px; }
+.empty { color: var(--faint); font-size: 12px; margin: 8px 0 0; }
+
+.table-view summary { cursor: pointer; letter-spacing: 0.04em; text-transform: none; }
+.table-view table { margin-top: 8px; }
+
+.intent + .intent { margin-top: 8px; }
+.entry { margin: 2px 0 0 2px; font-size: 12px; color: var(--mute); }
+.entry.night { color: var(--violet); }
+.over { color: var(--amber); font-family: var(--sans); font-size: 11px; }
+
+.tip { position: fixed; z-index: 10; pointer-events: none; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-m);
+  padding: 6px 9px; font: 12px/1.4 var(--sans); color: var(--ink); max-width: 320px; }

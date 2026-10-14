@@ -42,8 +42,14 @@ const act = (tabId: number, url: string, at: number, extra: Partial<{ windowId: 
   at,
 });
 const upd = (tabId: number, url: string, at: number, extra: Partial<{ windowId: number; audible: boolean; title: string }> = {}): TrackerEvent => ({
-  ...act(tabId, url, at, extra),
   type: 'tab-updated',
+  windowId: extra.windowId ?? 1,
+  tabId,
+  url,
+  title: extra.title,
+  incognito: false,
+  audible: extra.audible,
+  at,
 });
 const hb = (at: number): TrackerEvent => ({ type: 'heartbeat', at });
 const heartbeats = (fromSec: number, toSec: number) => {
@@ -98,8 +104,10 @@ describe('开段与切换', () => {
 
   it('跨逻辑日（05:00）拆成两片', () => {
     const at = (h: number, m: number) => new Date(2026, 9, 15, h, m).getTime();
-    const { pieces } = run([act(1, 'https://drift.test/', at(4, 58)), act(2, 'https://german.test/', at(5, 1))]);
-    expect(pieces.map((p) => p.date)).toEqual(['2026-10-14', '2026-10-15']);
+    const beats = [30, 60, 90, 120, 150].map((d) => hb(at(4, 58) + d * 1000));
+    const { pieces } = run([act(1, 'https://drift.test/', at(4, 58)), ...beats, act(2, 'https://german.test/', at(5, 1))]);
+    expect([...new Set(pieces.map((p) => p.date))]).toEqual(['2026-10-14', '2026-10-15']);
+    expect(sec(pieces)).toBe(180);
   });
 });
 
@@ -109,6 +117,28 @@ describe('心跳落库（ADR-0014）', () => {
     expect(sec(pieces)).toBe(180);
     expect(new Set(pieces.map((p) => p.segId)).size).toBe(1);
     expect(liveSeconds(state, s(300))).toBe(120);
+  });
+
+  it('合盖休眠后先到 idle→active：空窗不计入，从唤醒时刻重开', () => {
+    const { pieces, state } = run([
+      act(1, 'https://drift.test/', s(0)),
+      hb(s(30)),
+      { type: 'idle-changed', state: 'active', at: s(3600) },
+    ]);
+    expect(sec(pieces)).toBe(90);
+    expect(state.current?.startedAt).toBe(s(3600));
+  });
+
+  it('SW 重启后的对账不前移水位', () => {
+    const r = run([act(1, 'https://drift.test/', s(0)), hb(s(30))]);
+    const { pieces } = run(
+      [
+        { type: 'sync', at: s(900), focusedWindowId: 1, idleState: 'active', tabs: [{ windowId: 1, tabId: 1, url: 'https://drift.test/', incognito: false }] },
+        hb(s(930)),
+      ],
+      r.state,
+    );
+    expect(sec([...r.pieces, ...pieces])).toBe(90);
   });
 
   it('心跳断档（SW 被杀 / 休眠）：按水位 + 宽限截断，然后重开', () => {
