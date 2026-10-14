@@ -1,180 +1,214 @@
 /**
- * 暗色主题令牌（沿用 ADR-0010 的表面阶梯与等宽读数；v3 去掉强调色变体）。
- * 类别色：德语绿 / 学业蓝 / 娱乐红 / 其他灰；夜间时段用紫。
+ * 「纸与夜」设计系统（ADR-0015）
+ * 白天：暖白纸面、宋体标题、衬线数字——像一本安静的笔记本。
+ * 收尾 / 宵禁：深夜蓝与月光暖色——界面本身提醒你现在几点。
+ * 情绪由页面根节点的 data-mood="day|night" 切换；只用系统字体（零网络请求）。
+ * 类别色经 dataviz 校验（两种底色各一组，任意两两含色盲 ΔE ≥ 9）；私密用斜线纹理。
  */
 
-:root {
-  /* 表面阶梯——深度只靠提亮，不用阴影 */
-  --canvas: #0b0c0e;
-  --surface: #131518;
-  --elevated: #1a1d21;
-  --card: #20242a;
-  /* 发丝线 */
-  --line: #262b31;
-  --line-soft: rgba(255, 255, 255, 0.06);
-  /* 文本 */
-  --ink: #f2f4f7;
-  --body: #c9ced6;
-  --mute: #8b929c;
-  --faint: #565d68;
-  /* 语义信号色——灰阶界面中唯一的饱和色 */
-  --green: #3ddc84;
-  --amber: #ffb224;
-  --red: #ff5c5c;
-  --blue: #57c1ff;
-  --violet: #a99cf8;
-  --gray: #8b929c;
-  --green-soft: rgba(61, 220, 132, 0.13);
-  --amber-soft: rgba(255, 178, 36, 0.13);
-  --red-soft: rgba(255, 92, 92, 0.13);
-  /* 字体 */
-  --sans: -apple-system, 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
-  /* 圆角三档 */
-  --r-s: 4px;
-  --r-m: 8px;
-  --r-l: 10px;
-}
+.sw {
+  --serif: 'Songti SC', 'STSong', 'Noto Serif CJK SC', 'Source Han Serif SC', ui-serif, 'New York', Georgia, serif;
+  --num: ui-serif, 'New York', 'Iowan Old Style', Georgia, serif;
+  --sans: -apple-system, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', 'Microsoft YaHei', sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --r-s: 8px;
+  --r-m: 12px;
+  --r-l: 18px;
 
-/* ---------- 基座 ---------- */
+  /* 白天 · 纸 */
+  --bg: #f3f0e8;
+  --surface: #fbfaf6;
+  --raised: #ffffff;
+  --sunk: #ebe6db;
+  --line: #e3ddd1;
+  --line-strong: #cdc5b5;
+  --ink: #1d1b17;
+  --body: #46423a;
+  --mute: #847e71;
+  --faint: #b3ac9c;
+  --primary: #1d1b17;
+  --primary-ink: #fbfaf6;
+  --cta: #1f9e72;
+  --cta-ink: #ffffff;
+  --warn: #b0611a;
+  --nightfall: #5a55c8;
+  --c-german: #1f9e72;
+  --c-study: #3f7fd6;
+  --c-drift: #d4692a;
+  --c-other: #cdc5b5;
+  --hatch: #8f8878;
+  --c-private: repeating-linear-gradient(135deg, var(--hatch) 0 1.5px, transparent 1.5px 5px);
+  --backdrop: rgba(243, 240, 232, 0.9);
+  --shadow: 0 24px 60px -24px rgba(40, 32, 18, 0.28);
 
-.od-app, .od-app *, .od-app *::before, .od-app *::after { box-sizing: border-box; }
-
-.od-app {
-  background: var(--canvas);
+  background: var(--bg);
   color: var(--body);
-  font: 13px/1.6 var(--sans);
+  font: 14px/1.6 var(--sans);
   -webkit-font-smoothing: antialiased;
 }
 
-.od-app ::selection { background: rgba(61, 220, 132, 0.25); }
-
-/* 点阵网格——哨站雷达隐喻，每屏最多一处 */
-.od-dots {
-  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-  background-size: 24px 24px;
+.sw[data-mood='night'] {
+  /* 夜 · 深蓝与月光 */
+  --bg: #0d1020;
+  --surface: #141a2d;
+  --raised: #1a2138;
+  --sunk: #0f1428;
+  --line: #242b46;
+  --line-strong: #343c5e;
+  --ink: #f1eadb;
+  --body: #c8c2b3;
+  --mute: #8d89a3;
+  --faint: #5c5a78;
+  --primary: #f1eadb;
+  --primary-ink: #0d1020;
+  --cta: #22a376;
+  --cta-ink: #04130c;
+  --warn: #e0a457;
+  --nightfall: #a9a2f2;
+  --moon: #e9d8a3;
+  --c-german: #22a376;
+  --c-study: #5289dc;
+  --c-drift: #d06a2c;
+  --c-other: #3a405a;
+  --hatch: #8d89a3;
+  --backdrop: rgba(13, 16, 32, 0.94);
+  --shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.7);
+  color-scheme: dark;
 }
+
+.sw,
+.sw *,
+.sw *::before,
+.sw *::after {
+  box-sizing: border-box;
+}
+
+.sw ::selection { background: color-mix(in srgb, var(--c-german) 30%, transparent); }
 
 /* ---------- 排印 ---------- */
 
-.od-caption {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.sw-title { font: 600 26px/1.25 var(--serif); color: var(--ink); letter-spacing: 0.01em; margin: 0; }
+.sw-h2 { font: 600 17px/1.35 var(--serif); color: var(--ink); margin: 0; }
+.sw-label {
+  font: 600 11px/1.3 var(--sans);
+  letter-spacing: 0.14em;
   color: var(--mute);
+  text-transform: uppercase;
 }
-
-.od-stat {
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
+.sw-note { font-size: 12.5px; color: var(--mute); margin: 0; line-height: 1.55; }
+.sw-num {
+  font-family: var(--num);
+  font-variant-numeric: lining-nums tabular-nums;
   color: var(--ink);
+  letter-spacing: -0.01em;
 }
+.sw-mono { font-family: var(--mono); font-size: 12px; }
 
-.od-heading { font-size: 15px; font-weight: 600; color: var(--ink); }
+/* ---------- 面 ---------- */
 
-/* ---------- 表面 ---------- */
-
-.od-card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-l);
-}
-
-.od-card-raised { background: var(--elevated); border: 1px solid var(--line); border-radius: var(--r-l); }
+.sw-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-l); }
+.sw-rule-line { height: 1px; background: var(--line); border: 0; margin: 0; }
 
 /* ---------- 按钮 ---------- */
 
-.od-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  font: 600 13px/1 var(--sans);
-  padding: 9px 14px; border-radius: var(--r-m);
-  border: 1px solid transparent; cursor: pointer; text-decoration: none;
-  transition: background 0.15s, border-color 0.15s;
+.sw-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font: 600 14px/1 var(--sans);
+  padding: 13px 18px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform 0.12s ease, background 0.15s, border-color 0.15s, opacity 0.15s;
 }
-.od-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-
-/* 主操作：白色实心（黑字）——Raycast 纪律 */
-.od-btn-primary { background: #ffffff; color: #000000; }
-.od-btn-primary:hover:not(:disabled) { background: #e8e8e8; }
-
-/* 信号绿主操作——引导页"去学习"专用 */
-.od-btn-signal { background: var(--green); color: #04160c; }
-.od-btn-signal:hover:not(:disabled) { background: #5fe69c; }
-
-.od-btn-ghost { background: transparent; color: var(--body); border-color: var(--line); }
-.od-btn-ghost:hover:not(:disabled) { background: var(--elevated); }
-
-.od-btn-mini {
-  font: 500 12px/1 var(--sans); color: var(--mute);
-  background: var(--elevated); border: 1px solid var(--line);
-  padding: 6px 10px; border-radius: var(--r-s); cursor: pointer;
+.sw-btn:active:not(:disabled) { transform: scale(0.985); }
+.sw-btn:disabled { opacity: 0.38; cursor: default; }
+.sw-btn-primary { background: var(--primary); color: var(--primary-ink); }
+.sw-btn-cta { background: var(--cta); color: var(--cta-ink); }
+.sw-btn-ghost { background: transparent; color: var(--body); border-color: var(--line-strong); }
+.sw-btn-ghost:hover:not(:disabled) { border-color: var(--mute); color: var(--ink); }
+.sw-btn-quiet {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 4px 2px;
+  color: var(--mute);
+  font: 500 12.5px/1.4 var(--sans);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
 }
-.od-btn-mini:hover:not(:disabled) { color: var(--ink); background: var(--card); }
-.od-btn-mini:disabled { opacity: 0.4; cursor: not-allowed; }
+.sw-btn-quiet:hover { color: var(--ink); }
+.sw-btn-danger { background: transparent; color: #c2412d; border-color: color-mix(in srgb, #c2412d 40%, transparent); }
 
-.od-btn-danger { color: var(--red); border-color: rgba(255, 92, 92, 0.3); background: transparent; }
-.od-btn-danger:hover:not(:disabled) { background: var(--red-soft); }
+/* ---------- 选择 ---------- */
 
-/* ---------- 键帽徽章（签名装饰） ---------- */
+.sw-seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--sunk);
+  border-radius: 999px;
+}
+.sw-seg button {
+  appearance: none;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--mute);
+  font: 500 12.5px/1 var(--sans);
+  padding: 8px 0;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.sw-seg button:hover { color: var(--ink); }
+.sw-seg button.on { background: var(--raised); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
 
-.od-key {
-  display: inline-flex; align-items: center; gap: 5px;
-  font: 600 11px/1 var(--mono); font-variant-numeric: tabular-nums;
-  padding: 4px 8px; border-radius: var(--r-s);
-  background: linear-gradient(180deg, var(--card), var(--elevated));
-  border: 1px solid var(--line);
+.sw-chip {
+  appearance: none;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--body);
+  font: 500 13px/1 var(--sans);
+  padding: 9px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.sw-chip:hover { border-color: var(--mute); color: var(--ink); }
+.sw-chip.on { background: var(--primary); color: var(--primary-ink); border-color: var(--primary); }
+
+.sw-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.sw-swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; display: inline-block; }
+
+/* ---------- 仪表：细线 + 目标刻度 ---------- */
+
+.sw-meter { position: relative; height: 4px; border-radius: 999px; background: var(--sunk); }
+.sw-meter > i { position: absolute; inset: 0 auto 0 0; border-radius: 999px; transition: width 0.5s ease; }
+
+/* ---------- 表单 ---------- */
+
+.sw-input,
+.sw-select {
+  font: 400 14px/1.4 var(--sans);
   color: var(--ink);
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-s);
+  padding: 9px 12px;
+  width: 100%;
 }
-
-.od-key .k-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-
-/* 状态胶囊 */
-.od-pill {
-  display: inline-flex; align-items: center; gap: 5px;
-  font: 500 11px/1 var(--sans);
-  padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line);
-  color: var(--mute); background: var(--elevated);
-}
-.od-pill .p-dot { width: 6px; height: 6px; border-radius: 50%; }
-
-/* ---------- 仪表 ---------- */
-
-.od-meter { height: 6px; border-radius: 999px; background: var(--elevated); overflow: hidden; }
-.od-meter > i { display: block; height: 100%; border-radius: 999px; transition: width 0.4s ease; }
-
-.od-meter-row { display: flex; justify-content: space-between; align-items: baseline; }
-
-/* ---------- 列表行 ---------- */
-
-.od-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 7px 0; border-bottom: 1px solid var(--line-soft);
-}
-.od-row:last-child { border-bottom: none; }
-.od-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--body); }
-
-/* ---------- 表单控件（暗色） ---------- */
-
-.od-input, .od-select {
-  font: 400 13px/1.4 var(--sans);
-  background: var(--elevated); color: var(--ink);
-  border: 1px solid var(--line); border-radius: var(--r-m);
-  padding: 6px 9px; width: 100%;
-}
-.od-input:focus, .od-select:focus { outline: none; border-color: var(--faint); }
-.od-input::placeholder { color: var(--faint); }
-
-/* ---------- 表格（options） ---------- */
-
-.od-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.od-table th {
-  text-align: left; font: 600 11px/1 var(--sans); letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--mute); padding: 8px; border-bottom: 1px solid var(--line);
-}
-.od-table td { padding: 6px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
-
-/* ---------- 布局工具 ---------- */
-
-.od-stack > * + * { margin-top: 8px; }
-.od-section { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+.sw-input:focus,
+.sw-select:focus { outline: none; border-color: var(--ink); }
+.sw-input::placeholder { color: var(--faint); }
+.sw-input:disabled,
+.sw-select:disabled { opacity: 0.5; }
+.sw-input.bad { border-color: #c2412d; }

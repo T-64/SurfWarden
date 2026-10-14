@@ -1,6 +1,6 @@
 import { hostInList } from './classify';
 import { lastOccurrence, nextOccurrence, phaseAt } from './schedule';
-import type { Banner, CategoryId, Pass, Settings, Verdict } from './types';
+import type { Banner, BlockReason, CategoryId, Pass, Settings, Verdict } from './types';
 
 /**
  * 时段策略（纯函数）——判决表见 docs/design/architecture.md §5。
@@ -17,7 +17,10 @@ export const MIN_REASON_LEN = 4;
 
 export interface PolicyInput {
   now: number;
-  settings: Pick<Settings, 'schedule' | 'driftCapMin' | 'passOptionsMin' | 'curfewAllow' | 'curfewExtPerNight'>;
+  settings: Pick<
+    Settings,
+    'schedule' | 'driftCapMin' | 'passOptionsMin' | 'curfewAllow' | 'curfewExtPerNight' | 'privateCooldownSec' | 'privatePassMin' | 'privatePerDay'
+  >;
   category: CategoryId;
   host: string;
   /** 本站点最近一张通行证（可能已过期） */
@@ -27,24 +30,30 @@ export interface PolicyInput {
   passesToday: number;
   curfewExtUntil?: number;
   curfewExtUsed: number;
+  /** 今日已进入私密站点的次数 */
+  privateUsed: number;
 }
 
 export function decide(i: PolicyInput): Verdict {
   const { schedule } = i.settings;
   const phase = phaseAt(i.now, schedule);
 
+  // 娱乐与私密在夜间同等对待：拦截且不可延长
+  const night = i.category === 'drift' || i.category === 'private';
+
   if (phase === 'curfew') {
-    if (i.category === 'drift') return block('curfew', false, false);
+    if (night) return block('curfew', false, false);
     if (curfewAllowed(i)) return allow({ kind: 'late', since: lastOccurrence(i.now, schedule.bedtime) });
     if (i.curfewExtUntil !== undefined && i.curfewExtUntil > i.now) return allow({ kind: 'ext', until: i.curfewExtUntil });
     return block('curfew', i.curfewExtUsed < i.settings.curfewExtPerNight, false);
   }
 
   if (phase === 'winddown') {
-    if (i.category === 'drift') return block('winddown', false, false);
+    if (night) return block('winddown', false, false);
     return allow({ kind: 'winddown', bedtimeAt: nextOccurrence(i.now, schedule.bedtime) });
   }
 
+  if (i.category === 'private') return decidePrivate(i);
   if (i.category !== 'drift') return { kind: 'allow' };
   const capSec = i.settings.driftCapMin * 60;
   if (i.driftUsedSec >= capSec) return block('cap', false, false);
@@ -60,6 +69,18 @@ export function decide(i: PolicyInput): Verdict {
     passesToday: i.passesToday,
     driftLeftMin: leftMin,
   };
+}
+
+/** 白天的私密站点：通行证 → 时间到 → 每日次数 → 冷静期 */
+function decidePrivate(i: PolicyInput): Verdict {
+  const s = i.settings;
+  const left = i.privateUsed < s.privatePerDay;
+  if (i.pass) {
+    if (i.pass.until > i.now) return allow({ kind: 'pass', until: i.pass.until });
+    if (i.now - i.pass.until < EXPIRED_WINDOW_MS) return block('expired', false, left);
+  }
+  if (!left) return block('private-limit', false, false);
+  return { kind: 'cooldown', waitSec: s.privateCooldownSec, passMin: s.privatePassMin, usedToday: i.privateUsed, limit: s.privatePerDay };
 }
 
 export function gateWait(passesToday: number): number {
@@ -86,6 +107,16 @@ export function checkGrant(i: PolicyInput, minutes: number, intent: string, gate
   return { ok: true };
 }
 
+export type PrivateCheck = { ok: true } | { ok: false; reason: 'not-cooldown' | 'too-early' };
+
+/** 私密站点放行：此刻必须处于冷静期判决，且冷静期已满 */
+export function checkPrivateGrant(i: PolicyInput, shownAt: number | undefined): PrivateCheck {
+  const v = decide(i);
+  if (v.kind !== 'cooldown') return { ok: false, reason: 'not-cooldown' };
+  if (shownAt === undefined || i.now - shownAt < v.waitSec * 1000 - 1000) return { ok: false, reason: 'too-early' };
+  return { ok: true };
+}
+
 export type ExtendCheck = { ok: true } | { ok: false; reason: 'not-blocked' | 'exhausted' | 'short-reason' };
 
 export function checkCurfewExt(i: PolicyInput, reason: string): ExtendCheck {
@@ -97,6 +128,7 @@ export function checkCurfewExt(i: PolicyInput, reason: string): ExtendCheck {
 }
 
 function curfewAllowed(i: PolicyInput): boolean {
+  if (i.category === 'private') return false;
   return i.settings.curfewAllow.categories.includes(i.category) || hostInList(i.host, i.settings.curfewAllow.hosts);
 }
 
@@ -104,6 +136,6 @@ function allow(banner: Banner): Verdict {
   return { kind: 'allow', banner };
 }
 
-function block(reason: 'cap' | 'expired' | 'winddown' | 'curfew', canExtend: boolean, canRetry: boolean): Verdict {
+function block(reason: BlockReason, canExtend: boolean, canRetry: boolean): Verdict {
   return { kind: 'block', reason, canExtend, canRetry };
 }

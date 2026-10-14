@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkCurfewExt, checkGrant, decide, gateWait, passOptions, type PolicyInput } from '../src/core/policy';
+import { checkCurfewExt, checkGrant, checkPrivateGrant, decide, gateWait, passOptions, type PolicyInput } from '../src/core/policy';
 import type { CategoryId } from '../src/core/types';
 
 const settings: PolicyInput['settings'] = {
@@ -8,6 +8,9 @@ const settings: PolicyInput['settings'] = {
   passOptionsMin: [5, 10, 20],
   curfewAllow: { categories: ['german', 'study'], hosts: ['outlook.live.com'] },
   curfewExtPerNight: 1,
+  privateCooldownSec: 180,
+  privatePassMin: 20,
+  privatePerDay: 1,
 };
 
 const at = (h: number, m = 0) => new Date(2026, 9, 14, h, m).getTime();
@@ -20,6 +23,7 @@ function input(over: Partial<PolicyInput> & { category: CategoryId }): PolicyInp
     driftUsedSec: 0,
     passesToday: 0,
     curfewExtUsed: 0,
+    privateUsed: 0,
     ...over,
   };
 }
@@ -48,6 +52,37 @@ describe('判决表（architecture §5）', () => {
     const v = decide(input(over));
     const label = v.kind === 'allow' ? (v.banner ? `allow:${v.banner.kind}` : 'allow') : v.kind === 'block' ? `block:${v.reason}` : v.kind;
     expect(label).toBe(expected);
+  });
+
+  it('私密站点白天：冷静期（带时长与次数）', () => {
+    expect(decide(input({ category: 'private' }))).toEqual({ kind: 'cooldown', waitSec: 180, passMin: 20, usedToday: 0, limit: 1 });
+  });
+
+  it.each<[string, Partial<PolicyInput>, string]>([
+    ['今日次数用完 → 拦截', { privateUsed: 1 }, 'block:private-limit'],
+    ['通行证有效 → 放行', { pass: pass(at(13, 55), at(14, 5)) }, 'allow:pass'],
+    ['通行证到期 → 时间到', { pass: pass(at(13, 30), at(13, 50)) }, 'block:expired'],
+    ['收尾期 → 拦截', { now: at(22, 40) }, 'block:winddown'],
+    ['宵禁 → 拦截且不可延长（即使延长有效）', { now: at(23, 30), curfewExtUntil: at(23, 35) }, 'block:curfew'],
+    ['宵禁白名单不放行私密（即使类别被误加入白名单）', { now: at(23, 30), settings: { ...settings, curfewAllow: { categories: ['private'], hosts: [] } } }, 'block:curfew'],
+  ])('私密：%s', (_n, over, expected) => {
+    const v = decide(input({ category: 'private', ...over }));
+    const label = v.kind === 'allow' ? `allow:${v.banner?.kind}` : v.kind === 'block' ? `block:${v.reason}` : v.kind;
+    expect(label).toBe(expected);
+  });
+
+  it('私密到期后：今天还有次数才可再申请；娱乐额度不影响私密', () => {
+    const expired = pass(at(13, 30), at(13, 50));
+    expect(decide(input({ category: 'private', pass: expired }))).toMatchObject({ canRetry: true });
+    expect(decide(input({ category: 'private', pass: expired, privateUsed: 1 }))).toMatchObject({ canRetry: false });
+    expect(decide(input({ category: 'private', driftUsedSec: 99_999 })).kind).toBe('cooldown');
+  });
+
+  it('checkPrivateGrant：冷静期满才放行', () => {
+    const i = input({ category: 'private' });
+    expect(checkPrivateGrant(i, i.now - 180_000)).toEqual({ ok: true });
+    expect(checkPrivateGrant(i, i.now - 60_000)).toEqual({ ok: false, reason: 'too-early' });
+    expect(checkPrivateGrant({ ...i, privateUsed: 1 }, i.now - 999_000)).toEqual({ ok: false, reason: 'not-cooldown' });
   });
 
   it('宵禁拦截：今晚还有延长次数才可延长；娱乐永不可延长', () => {

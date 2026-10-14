@@ -1,17 +1,28 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { config } from '../../src/adapters/config';
 import { daysFor, eventsFor, sessionsFor, usageFor } from '../../src/adapters/db';
-import { germanStreak, intentSummary, nightStats, timeline, topHosts, totalsByCategory, totalsByDate, type NightStat } from '../../src/core/metrics';
-import { formatHHMM } from '../../src/core/schedule';
+import {
+  germanStreak,
+  intentSummary,
+  nightStats,
+  privateSummary,
+  timeline,
+  topHosts,
+  totalsByCategory,
+  totalsByDate,
+  type CategoryTotals,
+  type NightStat,
+} from '../../src/core/metrics';
+import { formatHHMM, phaseAt } from '../../src/core/schedule';
 import type { CategoryId, DayRow, EventRow, SessionRow, Settings, UsageRow } from '../../src/core/types';
 import { dateKey, lastNDates } from '../../src/shared/datetime';
 import { CATEGORY_META } from '../../src/shared/defaults';
 import { formatMin, hhmm } from '../../src/shared/format';
+import { useBodyMood } from '../../src/shared/mood';
 import '../../src/shared/theme.css';
 import './report.css';
 
-const CATS: CategoryId[] = ['german', 'study', 'drift', 'other'];
-const NIGHT_COLOR = '#a99cf8';
+const CATS: CategoryId[] = ['german', 'study', 'drift', 'private', 'other'];
 
 interface Data {
   settings: Settings;
@@ -19,6 +30,7 @@ interface Data {
   dates: string[];
   usage: UsageRow[];
   days: DayRow[];
+  events: EventRow[];
 }
 
 interface Tip {
@@ -26,125 +38,129 @@ interface Tip {
   y: number;
   text: string;
 }
+type TipFn = (e: React.MouseEvent, text: string) => void;
 
 export function ReportApp() {
   const [data, setData] = useState<Data | null>(null);
-  const [day, setDay] = useState<string>('');
-  const [detail, setDetail] = useState<{ sessions: SessionRow[]; events: EventRow[] } | null>(null);
+  const [day, setDay] = useState('');
+  const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [tip, setTip] = useState<Tip | null>(null);
+  const mood = data && phaseAt(Date.now(), data.settings.schedule) !== 'day' ? 'night' : 'day';
+  useBodyMood(mood);
 
   useEffect(() => {
     void (async () => {
       const settings = await config.getSettings();
       const today = dateKey(Date.now(), settings.dayCutoffHour);
       const dates = lastNDates(today, 14);
-      const [usage, days] = await Promise.all([usageFor(dates), daysFor(dates)]);
-      setData({ settings, today, dates, usage, days });
+      const [usage, days, events] = await Promise.all([usageFor(dates), daysFor(dates), eventsFor(dates)]);
+      setData({ settings, today, dates, usage, days, events });
       setDay(today);
     })();
   }, []);
 
   useEffect(() => {
-    if (!day) return;
-    void Promise.all([sessionsFor(day), eventsFor([day])]).then(([sessions, events]) => setDetail({ sessions, events }));
+    if (day) void sessionsFor(day).then(setSessions);
   }, [day]);
 
   const derived = useMemo(() => {
     if (!data) return null;
-    const { settings, today, dates, usage, days } = data;
+    const { settings, today, dates, usage, days, events } = data;
     const byDate = totalsByDate(usage);
     const nights = nightStats(days, dates, settings.schedule, settings.dayCutoffHour).filter((n) => n.date !== today || Date.now() > n.bedtimeAt);
+    const week = dates.slice(-7);
     return {
       byDate,
       nights,
       streak: germanStreak(byDate, dates, settings.germanGoalMin * 60),
-      week: dates.slice(-7).reduce((s, d) => s + (byDate.get(d)?.german ?? 0), 0),
+      weekGerman: week.reduce((s, d) => s + (byDate.get(d)?.german ?? 0), 0),
+      weekPrivate: privateSummary(events.filter((e) => week.includes(e.date))),
     };
   }, [data]);
 
-  if (!data || !derived) return <div className="od-app rep" />;
-  const { settings, today, dates, usage } = data;
+  if (!data || !derived) return <div className="sw rep" />;
+  const { settings, today, dates, usage, events } = data;
   const dayUsage = usage.filter((r) => r.date === day);
+  const dayEvents = events.filter((e) => e.date === day);
   const totals = totalsByCategory(dayUsage);
-  const showTip = (e: React.MouseEvent, text: string) => setTip({ x: e.clientX, y: e.clientY, text });
+  const known = derived.nights.filter((n) => n.lateMin !== null);
+  const onTime = known.filter((n) => n.lateMin! <= 0).length;
+  const showTip: TipFn = (e, text) => setTip({ x: e.clientX, y: e.clientY, text });
   const hideTip = () => setTip(null);
 
   return (
-    <div className="od-app rep" onMouseLeave={hideTip}>
+    <div className="sw rep" data-mood={mood} onMouseLeave={hideTip}>
       <header className="rep-head">
         <div>
-          <h1>
-            SURF<b>WARDEN</b> 报告
-          </h1>
-          <p className="od-caption">只统计这台电脑的浏览器 · 数据仅存本机</p>
+          <p className="sw-label">SurfWarden · 最近两周</p>
+          <h1 className="sw-title">{headline(onTime, known.length, derived.streak)}</h1>
         </div>
-        <button className="od-btn-mini" onClick={() => void chrome.runtime.openOptionsPage()}>
+        <button className="sw-btn-quiet" onClick={() => void chrome.runtime.openOptionsPage()}>
           设置
         </button>
       </header>
 
       <div className="grid2">
-        <Card title="作息 · 每晚最后一次上网" aside={<NightSummary nights={derived.nights} bedtime={settings.schedule.bedtime} />}>
+        <Section
+          title="每晚最后一次上网"
+          figure={<Figure value={known.length ? `${onTime}/${known.length}` : '—'} label={`晚在 ${formatHHMM(settings.schedule.bedtime)} 前下线`} />}
+        >
           <NightChart nights={derived.nights} onTip={showTip} offTip={hideTip} />
           <NightTable nights={derived.nights} />
-        </Card>
+        </Section>
 
-        <Card
-          title="德语 · 每日分钟"
-          aside={
-            <div className="tiles">
-              <Tile label="连续达标" value={`${derived.streak} 天`} />
-              <Tile label="近 7 天" value={formatMin(derived.week)} />
+        <Section
+          title="德语"
+          figure={
+            <div className="figs">
+              <Figure value={`${derived.streak}`} label="天连续达标" />
+              <Figure value={formatMin(derived.weekGerman).replace(' 分钟', '′').replace(' 小时 ', 'h ').replace(' 分', '′')} label="近 7 天" />
             </div>
           }
         >
           <GermanChart dates={dates} byDate={derived.byDate} goalMin={settings.germanGoalMin} today={today} onTip={showTip} offTip={hideTip} />
-        </Card>
+        </Section>
       </div>
 
-      <Card
+      <Section
         title="一天的时间去哪了"
-        aside={
+        figure={
           <div className="days">
             {dates.slice(-7).map((d) => (
-              <button key={d} className={`od-btn-mini${d === day ? ' on' : ''}`} onClick={() => setDay(d)}>
-                {d === today ? '今天' : d.slice(5)}
+              <button key={d} className={d === day ? 'on' : ''} onClick={() => setDay(d)}>
+                {d === today ? '今天' : d.slice(5).replace('-', '/')}
               </button>
             ))}
           </div>
         }
       >
         <Legend />
-        {detail && <Timeline sessions={detail.sessions} date={day} cutoff={settings.dayCutoffHour} onTip={showTip} offTip={hideTip} />}
+        <Timeline sessions={sessions} date={day} cutoff={settings.dayCutoffHour} onTip={showTip} offTip={hideTip} />
         <div className="grid2 inner">
+          <Totals totals={totals} />
           <div>
-            <p className="od-caption sub">类别</p>
-            {CATS.map((c) => (
-              <div className="od-row" key={c}>
-                <span className="sw" style={{ background: CATEGORY_META[c].color }} />
-                <span className="name">{CATEGORY_META[c].name}</span>
-                <span className="od-stat">{formatMin(totals[c])}</span>
-              </div>
-            ))}
-          </div>
-          <div>
-            <p className="od-caption sub">站点 TOP 8</p>
+            <p className="sw-label sub">站点</p>
             {topHosts(dayUsage, 8).map((h) => (
-              <div className="od-row" key={h.host}>
-                <span className="sw" style={{ background: CATEGORY_META[h.category].color }} />
-                <span className="name mono">{h.host}</span>
-                <span className="od-stat">{formatMin(h.seconds)}</span>
+              <div className="line" key={h.host}>
+                <Swatch c={h.category} />
+                <span className={`name${h.category === 'private' ? '' : ' sw-mono'}`}>{h.host}</span>
+                <span className="sw-num val">{formatMin(h.seconds)}</span>
               </div>
             ))}
-            {dayUsage.length === 0 && <p className="empty">这一天没有记录。</p>}
+            {dayUsage.length === 0 && <p className="sw-note">这一天没有记录。</p>}
           </div>
         </div>
-      </Card>
+      </Section>
 
-      {detail && <IntentLog events={detail.events} usage={dayUsage} />}
+      <div className="grid2">
+        <IntentLog events={dayEvents} usage={dayUsage} />
+        <PrivateCard week={derived.weekPrivate} />
+      </div>
+
+      <p className="sw-note foot">只统计这台电脑上的浏览器，手机不在其中。所有数据只存在本机。</p>
 
       {tip && (
-        <div className="tip" style={{ left: tip.x + 12, top: tip.y + 12 }}>
+        <div className="tip" style={{ left: tip.x + 14, top: tip.y + 14 }}>
           {tip.text}
         </div>
       )}
@@ -152,27 +168,38 @@ export function ReportApp() {
   );
 }
 
-// ---------- 部件 ----------
+function headline(onTime: number, nights: number, streak: number): string {
+  if (nights === 0) return '记录刚开始，先用几天看看。';
+  const rate = onTime / nights;
+  const sleep = rate >= 0.7 ? '大多数晚上按时下线了' : rate >= 0.4 ? '一半左右的晚上按时下线' : '晚上下线还偏晚';
+  return streak >= 2 ? `${sleep}，德语连续 ${streak} 天达标。` : `${sleep}。`;
+}
 
-function Card({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
+// ---------- 版式部件 ----------
+
+function Section({ title, figure, children }: { title: string; figure?: ReactNode; children: ReactNode }) {
   return (
-    <section className="od-section card">
-      <div className="card-head">
-        <h2>{title}</h2>
-        {aside}
+    <section className="sw-card sec">
+      <div className="sec-head">
+        <h2 className="sw-h2">{title}</h2>
+        {figure}
       </div>
       {children}
     </section>
   );
 }
 
-function Tile({ label, value }: { label: string; value: string }) {
+function Figure({ value, label }: { value: string; label: string }) {
   return (
-    <div className="tile">
-      <span className="od-caption">{label}</span>
-      <span className="od-stat">{value}</span>
+    <div className="fig">
+      <span className="sw-num">{value}</span>
+      <span className="sw-note">{label}</span>
     </div>
   );
+}
+
+function Swatch({ c }: { c: CategoryId }) {
+  return <span className={`sw-swatch${c === 'private' ? ' hatch' : ''}`} style={c === 'private' ? undefined : { background: CATEGORY_META[c].color }} />;
 }
 
 function Legend() {
@@ -180,7 +207,7 @@ function Legend() {
     <div className="legend">
       {CATS.map((c) => (
         <span key={c}>
-          <i style={{ background: CATEGORY_META[c].color }} />
+          <Swatch c={c} />
           {CATEGORY_META[c].name}
         </span>
       ))}
@@ -188,12 +215,25 @@ function Legend() {
   );
 }
 
-type TipFn = (e: React.MouseEvent, text: string) => void;
+function Totals({ totals }: { totals: CategoryTotals }) {
+  return (
+    <div>
+      <p className="sw-label sub">类别</p>
+      {CATS.map((c) => (
+        <div className="line" key={c}>
+          <Swatch c={c} />
+          <span className="name">{CATEGORY_META[c].name}</span>
+          <span className="sw-num val">{formatMin(totals[c])}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** 图按容器实际像素宽度绘制（不用 viewBox 缩放），窄屏下文字仍是 10px */
 function useWidth(): [React.RefObject<HTMLDivElement | null>, number] {
   const ref = useRef<HTMLDivElement>(null);
-  const [w, setW] = useState(560);
+  const [w, setW] = useState(520);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -206,56 +246,49 @@ function useWidth(): [React.RefObject<HTMLDivElement | null>, number] {
 
 // ---------- 作息 ----------
 
-/** y 轴：就寝 −3h … +4h（夜间相对时间），超出夹到边缘 */
+/** y 轴：就寝 −3h … +4h，越晚越靠下（像夜色往下沉） */
 const NIGHT_MIN = -180;
 const NIGHT_MAX = 240;
 
-function NightSummary({ nights, bedtime }: { nights: NightStat[]; bedtime: number }) {
-  const known = nights.filter((n) => n.lateMin !== null);
-  const onTime = known.filter((n) => n.lateMin! <= 0).length;
-  return (
-    <div className="tiles">
-      <Tile label={`${formatHHMM(bedtime)} 前下线`} value={known.length ? `${onTime} / ${known.length} 晚` : '—'} />
-    </div>
-  );
-}
-
 function NightChart({ nights, onTip, offTip }: { nights: NightStat[]; onTip: TipFn; offTip: () => void }) {
   const [ref, W] = useWidth();
-  const H = 190;
-  const pad = { l: 44, r: 12, t: 12, b: 26 };
+  const H = 200;
+  const pad = { l: 44, r: 10, t: 14, b: 26 };
   const iw = W - pad.l - pad.r;
   const ih = H - pad.t - pad.b;
   const n = Math.max(nights.length, 1);
   const x = (i: number) => pad.l + (iw * (i + 0.5)) / n;
   const y = (m: number) => pad.t + (ih * (Math.min(NIGHT_MAX, Math.max(NIGHT_MIN, m)) - NIGHT_MIN)) / (NIGHT_MAX - NIGHT_MIN);
-  const ticks = [-120, -60, 0, 60, 120, 180, 240];
   const bed = nights[0]?.bedtimeAt;
-  const label = (m: number) => (bed ? hhmm(bed + m * 60_000) : '');
   const last = [...nights].reverse().find((nn) => nn.lateMin !== null);
+  const pts = nights.map((nt, i) => (nt.lateMin === null ? null : `${x(i)},${y(nt.lateMin)}`)).filter(Boolean);
 
   return (
     <div ref={ref}>
       <svg width={W} height={H} className="chart" role="img" aria-label="每晚最后上网时间">
-        {ticks.map((t) => (
+        <rect x={pad.l} y={y(0)} width={iw} height={y(NIGHT_MAX) - y(0)} className="late-zone" />
+        {[-120, -60, 0, 60, 120, 180, 240].map((t) => (
           <g key={t}>
             <line x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} className={t === 0 ? 'ref' : 'grid'} />
-            <text x={pad.l - 8} y={y(t) + 4} className="axis" textAnchor="end">
-              {label(t)}
+            <text x={pad.l - 8} y={y(t) + 3.5} className="axis" textAnchor="end">
+              {bed ? hhmm(bed + t * 60_000) : ''}
             </text>
           </g>
         ))}
-        <text x={pad.l + 4} y={y(0) - 6} className="axis ref-label">
+        <text x={pad.l + 6} y={y(0) - 6} className="axis ref-label">
           就寝
         </text>
+        {pts.length > 1 && <polyline points={pts.join(' ')} className="night-line" />}
         {nights.map((nt, i) => (
           <g key={nt.date}>
-            <text x={x(i)} y={H - 8} className="axis" textAnchor="middle">
-              {nt.date.slice(8)}
-            </text>
+            {(W > 420 || i % 2 === (nights.length - 1) % 2) && (
+              <text x={x(i)} y={H - 8} className="axis" textAnchor="middle">
+                {nt.date.slice(8)}
+              </text>
+            )}
             {nt.lateMin !== null && (
               <>
-                <circle cx={x(i)} cy={y(nt.lateMin)} r={5} fill={NIGHT_COLOR} stroke="var(--surface)" strokeWidth={2} />
+                <circle cx={x(i)} cy={y(nt.lateMin)} r={4.5} className={`night-dot${nt.lateMin <= 0 ? ' ok' : ''}`} />
                 <rect
                   x={x(i) - iw / n / 2}
                   y={pad.t}
@@ -265,8 +298,8 @@ function NightChart({ nights, onTip, offTip }: { nights: NightStat[]; onTip: Tip
                   onMouseMove={(e) =>
                     onTip(
                       e,
-                      `${nt.date} 晚 · 最后上网 ${hhmm(nt.lastAt!)}（${nt.lateMin! > 0 ? `晚 ${nt.lateMin} 分` : `早 ${-nt.lateMin!} 分`}）${
-                        nt.firstNextAt ? ` · 次日首次 ${hhmm(nt.firstNextAt)}` : ''
+                      `${nt.date.slice(5)} 晚 · 最后上网 ${hhmm(nt.lastAt!)}（${nt.lateMin! > 0 ? `晚 ${nt.lateMin} 分` : `早 ${-nt.lateMin!} 分`}）${
+                        nt.firstNextAt ? ` · 次日 ${hhmm(nt.firstNextAt)} 首次上网` : ''
                       }`,
                     )
                   }
@@ -277,7 +310,7 @@ function NightChart({ nights, onTip, offTip }: { nights: NightStat[]; onTip: Tip
           </g>
         ))}
         {last && (
-          <text x={x(nights.indexOf(last))} y={y(last.lateMin!) - 10} className="val" textAnchor="middle">
+          <text x={x(nights.indexOf(last))} y={y(last.lateMin!) - 11} className="val" textAnchor="middle">
             {hhmm(last.lastAt!)}
           </text>
         )}
@@ -289,8 +322,8 @@ function NightChart({ nights, onTip, offTip }: { nights: NightStat[]; onTip: Tip
 function NightTable({ nights }: { nights: NightStat[] }) {
   return (
     <details className="table-view">
-      <summary className="od-caption">表格</summary>
-      <table className="od-table">
+      <summary>表格</summary>
+      <table>
         <thead>
           <tr>
             <th>晚上</th>
@@ -302,10 +335,10 @@ function NightTable({ nights }: { nights: NightStat[] }) {
         <tbody>
           {[...nights].reverse().map((n) => (
             <tr key={n.date}>
-              <td>{n.date}</td>
-              <td className="mono">{n.lastAt ? hhmm(n.lastAt) : '—'}</td>
-              <td className="mono">{n.lateMin === null ? '—' : n.lateMin > 0 ? `+${n.lateMin} 分` : `${n.lateMin} 分`}</td>
-              <td className="mono">{n.firstNextAt ? hhmm(n.firstNextAt) : '—'}</td>
+              <td>{n.date.slice(5)}</td>
+              <td className="sw-num">{n.lastAt ? hhmm(n.lastAt) : '—'}</td>
+              <td className="sw-num">{n.lateMin === null ? '—' : n.lateMin > 0 ? `+${n.lateMin} 分` : `${n.lateMin} 分`}</td>
+              <td className="sw-num">{n.firstNextAt ? hhmm(n.firstNextAt) : '—'}</td>
             </tr>
           ))}
         </tbody>
@@ -325,22 +358,22 @@ function GermanChart({
   offTip,
 }: {
   dates: string[];
-  byDate: Map<string, Record<CategoryId, number>>;
+  byDate: Map<string, CategoryTotals>;
   goalMin: number;
   today: string;
   onTip: TipFn;
   offTip: () => void;
 }) {
   const [ref, W] = useWidth();
-  const H = 190;
-  const pad = { l: 32, r: 12, t: 14, b: 26 };
+  const H = 200;
+  const pad = { l: 30, r: 10, t: 16, b: 26 };
   const iw = W - pad.l - pad.r;
   const ih = H - pad.t - pad.b;
   const mins = dates.map((d) => Math.round((byDate.get(d)?.german ?? 0) / 60));
-  const max = Math.max(goalMin * 1.25, ...mins, 10);
+  const max = Math.max(goalMin * 1.3, ...mins, 10);
   const y = (m: number) => pad.t + ih - (ih * m) / max;
   const slot = iw / dates.length;
-  const bw = Math.min(24, slot - 6);
+  const bw = Math.min(18, slot - 8);
   const step = max > 120 ? 60 : 30;
   const ticks = Array.from({ length: Math.floor(max / step) + 1 }, (_, i) => i * step);
 
@@ -350,29 +383,30 @@ function GermanChart({
         {ticks.map((t) => (
           <g key={t}>
             <line x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} className="grid" />
-            <text x={pad.l - 8} y={y(t) + 4} className="axis" textAnchor="end">
+            <text x={pad.l - 8} y={y(t) + 3.5} className="axis" textAnchor="end">
               {t}
             </text>
           </g>
         ))}
         <line x1={pad.l} x2={W - pad.r} y1={y(goalMin)} y2={y(goalMin)} className="ref" />
-        <text x={pad.l + 4} y={y(goalMin) - 6} className="axis ref-label">
+        <text x={pad.l + 6} y={y(goalMin) - 6} className="axis ref-label">
           目标 {goalMin}
         </text>
         {dates.map((d, i) => {
           const cx = pad.l + slot * (i + 0.5);
           const m = mins[i]!;
           const h = Math.max(0, y(0) - y(m));
+          const met = m >= goalMin;
           return (
             <g key={d}>
-              {m > 0 && <path d={roundTop(cx - bw / 2, y(m), bw, h, Math.min(4, h))} fill={CATEGORY_META.german.color} />}
+              {m > 0 && <path d={roundTop(cx - bw / 2, y(m), bw, h, Math.min(4, h))} style={{ fill: 'var(--c-german)', opacity: met ? 1 : 0.55 }} />}
               {(W > 420 || i % 2 === (dates.length - 1) % 2) && (
                 <text x={cx} y={H - 8} className={`axis${d === today ? ' strong' : ''}`} textAnchor="middle">
                   {d === today ? '今' : d.slice(8)}
                 </text>
               )}
               {d === today && m > 0 && (
-                <text x={cx} y={y(m) - 6} className="val" textAnchor="middle">
+                <text x={cx} y={y(m) - 7} className="val" textAnchor="middle">
                   {m}
                 </text>
               )}
@@ -382,7 +416,7 @@ function GermanChart({
                 width={slot}
                 height={ih}
                 fill="transparent"
-                onMouseMove={(e) => onTip(e, `${d} · 德语 ${m} 分${m >= goalMin ? ' ✓ 达标' : ''}`)}
+                onMouseMove={(e) => onTip(e, `${d.slice(5)} · 德语 ${m} 分${met ? '（达标）' : ''}`)}
                 onMouseLeave={offTip}
               />
             </g>
@@ -393,7 +427,7 @@ function GermanChart({
   );
 }
 
-/** 顶部 4px 圆角、底部方角的柱 */
+/** 顶部圆角、底部方角的柱 */
 function roundTop(x: number, y: number, w: number, h: number, r: number): string {
   return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
 }
@@ -403,31 +437,33 @@ function roundTop(x: number, y: number, w: number, h: number, r: number): string
 function Timeline({ sessions, date, cutoff, onTip, offTip }: { sessions: SessionRow[]; date: string; cutoff: number; onTip: TipFn; offTip: () => void }) {
   const blocks = timeline(sessions, date, cutoff);
   const [ref, W] = useWidth();
-  const H = 46;
-  const barH = 22;
+  const H = 52;
+  const barH = 26;
   const hours = Array.from({ length: 9 }, (_, i) => i * 3).filter((h) => W > 520 || h % 6 === 0);
   return (
     <div ref={ref}>
-      <svg width={W} height={H} className="chart timeline" role="img" aria-label="一天的时间线">
-        <rect x={0} y={0} width={W} height={barH} rx={4} className="track" />
-        {blocks.map((b, i) => {
-          const x = b.from * W;
-          const w = Math.max(1, (b.to - b.from) * W - 2); // 2px 表面间隙
-          return (
-            <rect
-              key={i}
-              x={x}
-              y={0}
-              width={w}
-              height={barH}
-              fill={CATEGORY_META[b.category].color}
-              onMouseMove={(e) => onTip(e, `${CATEGORY_META[b.category].name} · ${b.host} · ${hourLabel(b.from, cutoff)}–${hourLabel(b.to, cutoff)}`)}
-              onMouseLeave={offTip}
-            />
-          );
-        })}
+      <svg width={W} height={H} className="chart" role="img" aria-label="一天的时间线">
+        <defs>
+          <pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="5" height="5" style={{ fill: 'var(--surface)' }} />
+            <rect width="1.6" height="5" style={{ fill: 'var(--hatch)' }} />
+          </pattern>
+        </defs>
+        <rect x={0} y={0} width={W} height={barH} rx={6} className="track" />
+        {blocks.map((b, i) => (
+          <rect
+            key={i}
+            x={b.from * W}
+            y={0}
+            width={Math.max(1.5, (b.to - b.from) * W - 2)}
+            height={barH}
+            style={{ fill: b.category === 'private' ? 'url(#hatch)' : CATEGORY_META[b.category].color }}
+            onMouseMove={(e) => onTip(e, `${CATEGORY_META[b.category].name} · ${b.host} · ${hourLabel(b.from, cutoff)}–${hourLabel(b.to, cutoff)}`)}
+            onMouseLeave={offTip}
+          />
+        ))}
         {hours.map((h) => (
-          <text key={h} x={(h / 24) * W} y={H - 4} className="axis" textAnchor={h === 0 ? 'start' : h === 24 ? 'end' : 'middle'}>
+          <text key={h} x={(h / 24) * W} y={H - 6} className="axis" textAnchor={h === 0 ? 'start' : h === 24 ? 'end' : 'middle'}>
             {String((cutoff + h) % 24).padStart(2, '0')}
           </text>
         ))}
@@ -437,40 +473,61 @@ function Timeline({ sessions, date, cutoff, onTip, offTip }: { sessions: Session
 }
 
 function hourLabel(frac: number, cutoff: number): string {
-  const min = Math.round(frac * 1440) + cutoff * 60;
-  return formatHHMM(min % 1440);
+  return formatHHMM((Math.round(frac * 1440) + cutoff * 60) % 1440);
 }
 
-// ---------- 意图日志 ----------
+// ---------- 意图与私密 ----------
 
 function IntentLog({ events, usage }: { events: EventRow[]; usage: UsageRow[] }) {
   const sites = intentSummary(events, usage);
   const exts = events.filter((e) => e.type === 'curfew-ext');
   const goGerman = events.filter((e) => e.type === 'go-german').length;
   return (
-    <Card title="意图日志 · 说要看多久 vs 实际看了多久" aside={goGerman > 0 ? <span className="od-caption">从拦截页去学德语 {goGerman} 次</span> : undefined}>
-      {sites.length === 0 && exts.length === 0 && <p className="empty">这一天没有进入过娱乐站。</p>}
+    <Section title="说要看多久，实际看了多久" figure={goGerman > 0 ? <Figure value={`${goGerman}`} label="次从拦截页去学德语" /> : undefined}>
+      {sites.length === 0 && exts.length === 0 && <p className="sw-note">这一天没有进入过娱乐站。</p>}
       {sites.map((s) => (
         <div className="intent" key={s.site}>
-          <div className="od-row">
-            <span className="name mono">{s.site}</span>
-            <span className="od-stat">
-              申请 {s.grantedMin} 分 · 实际 <b>{s.actualMin}</b> 分
-              {s.actualMin > s.grantedMin && <span className="over"> ▲ 超出 {s.actualMin - s.grantedMin}</span>}
+          <div className="line">
+            <span className="name sw-mono">{s.site}</span>
+            <span className="cmp">
+              说 <b className="sw-num">{s.grantedMin}</b> · 实际 <b className="sw-num">{s.actualMin}</b> 分
+              {s.actualMin > s.grantedMin && <span className="over"> ▲ {s.actualMin - s.grantedMin}</span>}
             </span>
           </div>
           {s.entries.map((e) => (
             <p key={e.at} className="entry">
-              <span className="mono">{hhmm(e.at)}</span> 「{e.intent}」· {e.minutes} 分
+              <span className="sw-num">{hhmm(e.at)}</span>「{e.intent}」{e.minutes} 分钟
             </p>
           ))}
         </div>
       ))}
       {exts.map((e) => (
         <p key={e.id ?? e.at} className="entry night">
-          <span className="mono">{hhmm(e.at)}</span> 宵禁延长 {e.minutes} 分 ·「{e.reason}」
+          <span className="sw-num">{hhmm(e.at)}</span> 宵禁延长 {e.minutes} 分钟 ·「{e.reason}」
         </p>
       ))}
-    </Card>
+    </Section>
+  );
+}
+
+function PrivateCard({ week }: { week: ReturnType<typeof privateSummary> }) {
+  const total = week.entered + week.skipped;
+  const actions = Object.entries(week.actions).sort((a, b) => b[1] - a[1]);
+  return (
+    <Section title="私密 · 近 7 天" figure={total > 0 ? <Figure value={`${week.skipped}/${total}`} label="次冷静后离开" /> : undefined}>
+      {total === 0 ? (
+        <p className="sw-note">没有触发过冷静期。</p>
+      ) : (
+        <>
+          <p className="sw-note">冷静期后离开 {week.skipped} 次，进入 {week.entered} 次。频率本身没有好坏，这里只记录"是不是你自己决定的"。</p>
+          {actions.map(([a, n]) => (
+            <div className="line" key={a}>
+              <span className="name">{a}</span>
+              <span className="sw-num val">{n} 次</span>
+            </div>
+          ))}
+        </>
+      )}
+    </Section>
   );
 }

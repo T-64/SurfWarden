@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { germanStreak, intentSummary, nightStats, timeline, topHosts, totalsByCategory, totalsByDate } from '../src/core/metrics';
+import { germanStreak, intentSummary, nightStats, PRIVATE_HOST, privateSummary, timeline, topHosts, totalsByCategory, totalsByDate } from '../src/core/metrics';
 import type { EventRow, SessionRow, UsageRow } from '../src/core/types';
 import { lastNDates } from '../src/shared/datetime';
 
@@ -9,7 +9,7 @@ describe('聚合', () => {
   const rows = [u('2026-10-14', 'german', 'learngerman.dw.com', 1200), u('2026-10-14', 'drift', 'live.bilibili.com', 1800), u('2026-10-13', 'drift', 'www.x.com', 600)];
 
   it('totalsByCategory / totalsByDate', () => {
-    expect(totalsByCategory(rows)).toEqual({ german: 1200, study: 0, drift: 2400, other: 0 });
+    expect(totalsByCategory(rows)).toEqual({ german: 1200, study: 0, drift: 2400, private: 0, other: 0 });
     expect(totalsByDate(rows).get('2026-10-13')?.drift).toBe(600);
   });
 
@@ -89,5 +89,22 @@ describe('intentSummary', () => {
     expect(bili).toMatchObject({ site: 'bilibili.com', grantedMin: 30, actualMin: 40 });
     expect(bili!.entries).toHaveLength(2);
     expect(x).toMatchObject({ site: 'x.com', grantedMin: 0, actualMin: 5 });
+  });
+});
+
+describe('私密：不暴露域名', () => {
+  it('topHosts 把私密站点合并为一行，不出现域名', () => {
+    const top = topHosts([u('d', 'private', 'pornhub.com', 600), u('d', 'private', 'jable.tv', 300), u('d', 'german', 'dw.com', 100)], 5);
+    expect(top[0]).toEqual({ host: PRIVATE_HOST, seconds: 900, category: 'private' });
+    expect(JSON.stringify(top)).not.toMatch(/pornhub|jable/);
+  });
+
+  it('privateSummary：进入 / 冷静后离开 / 动作统计', () => {
+    const ev = (type: EventRow['type'], intent?: string): EventRow => ({ date: 'd', at: 1, type, intent });
+    expect(privateSummary([ev('private-skip', '冷水洗脸'), ev('private-skip', '俯卧撑'), ev('private-pass', '冷水洗脸'), ev('pass', 'x')])).toEqual({
+      entered: 1,
+      skipped: 2,
+      actions: { 冷水洗脸: 2, 俯卧撑: 1 },
+    });
   });
 });

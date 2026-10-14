@@ -89,7 +89,12 @@ end = max(end, pieceStart)
 | day | drift | 封顶 | block:cap |
 | day | drift | 通行证刚过期（与 `expiredPass` 同站） | block:expired（可以再申请） |
 | day | drift | 无通行证 | gate（`waitSec` 按当天次数递增，时长档位不超过剩余额度） |
-| day | 非 drift | — | allow |
+| day | 非 drift、非 private | — | allow |
+| 收尾 / 宵禁 | private | — | 与 drift 相同：拦截且不可延长；宵禁白名单永远不放行 |
+| day | private | 通行证有效 | allow + 横幅 pass |
+| day | private | 通行证刚过期 | block:expired（今天还有次数时可以再来，需要重新冷静） |
+| day | private | 今日次数用完 | block:private-limit |
+| day | private | 其他情况 | cooldown（`waitSec` 为冷静期秒数；`checkPrivateGrant` 要求冷静期已满） |
 
 `grantPass` 的校验也放在 core 里：必须是白天、在额度以内、档位合法、已经等够了时间。
 
@@ -127,4 +132,5 @@ events     ++id, date                         pass / curfew-ext / go-german / ma
 ## 8. 变更记录
 
 - 2026-10-14 v3 初稿。
+- 2026-10-14 新增私密类别与冷静期判决；配置变化后做完整对账（按新阈值重新查询 idle 状态，修复调大阈值后一直停在 idle 的问题）；视觉换成「纸与夜」（ADR-0015）。
 - 2026-10-14 落库线回退一个 idle 阈值；断档检查前移到所有事件之前（修复合盖唤醒计入空窗）。白天的拦截（封顶 / 时间到）也提供频道标记，夜间不提供。类别色经 dataviz 校验换成绿 / 蓝 / 橙（避开红绿色盲冲突）。

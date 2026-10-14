@@ -41,6 +41,8 @@ export interface PopupState {
   germanGoalMin: number;
   driftSec: number;
   driftCapMin: number;
+  privateUsed: number;
+  privatePerDay: number;
   totalSec: number;
   /** popup 所在窗口的 active tab（可能未在计时） */
   tab: {
@@ -66,6 +68,8 @@ export type Msg =
   | { type: 'mark-channel'; category: CategoryId; tabId?: number }
   | { type: 'go-german'; tabId?: number }
   | { type: 'close-tab' }
+  /** 私密冷静期后选择离开：记一次「赢」并关闭标签 */
+  | { type: 'private-skip'; action: string }
   | { type: 'popup-state'; tabId: number | null }
   | { type: 'override'; category: CategoryId; tabId: number }
   | { type: 'add-rule'; pattern: string; category: CategoryId };

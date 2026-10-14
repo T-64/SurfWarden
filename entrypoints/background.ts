@@ -3,7 +3,7 @@ import { config } from '../src/adapters/config';
 import { addEvent, countEvents, purgeSessionsOlderThan, recordPieces, usageFor } from '../src/adapters/db';
 import { channelKey, hostOf, makeClassifier, siteKey, type Classifier } from '../src/core/classify';
 import { totalsByCategory, type CategoryTotals } from '../src/core/metrics';
-import { checkCurfewExt, checkGrant, decide, type PolicyInput } from '../src/core/policy';
+import { checkCurfewExt, checkGrant, checkPrivateGrant, decide, type PolicyInput } from '../src/core/policy';
 import { formatHHMM, lastOccurrence, nextOccurrence, nextPhaseChange, phaseAt } from '../src/core/schedule';
 import { initialState, liveSeconds, step } from '../src/core/tracker';
 import type { CategoryId, ClassifyResult, Pass, Settings, TrackerDeps, TrackerEvent, TrackerState } from '../src/core/types';
@@ -88,12 +88,13 @@ export default defineBackground(() => {
 
   async function policyInput(category: CategoryId, host: string, now: number): Promise<PolicyInput> {
     const date = today(now);
-    const [passes, totals, passesToday, curfewExtUsed, ext] = await Promise.all([
+    const [passes, totals, passesToday, curfewExtUsed, ext, privateUsed] = await Promise.all([
       session<Record<string, Pass>>(S.passes, {}),
       liveTotals(now),
       countEvents([date], 'pass'),
       countEvents([addDays(date, -1), date], 'curfew-ext', lastOccurrence(now, settings.schedule.bedtime)),
       session<{ until: number } | null>(S.ext, null),
+      countEvents([date], 'private-pass'),
     ]);
     return {
       now,
@@ -105,6 +106,7 @@ export default defineBackground(() => {
       passesToday,
       curfewExtUntil: ext?.until,
       curfewExtUsed,
+      privateUsed,
     };
   }
 
@@ -123,7 +125,7 @@ export default defineBackground(() => {
     const input = await policyInput(cls.category, host, now);
     const verdict = decide(input);
     const site = siteKey(host);
-    if (verdict.kind === 'gate') {
+    if (verdict.kind === 'gate' || verdict.kind === 'cooldown') {
       const gates = await session<GateShown>(S.gates, {});
       if (gates[tabId]?.site !== site) {
         gates[tabId] = { site, at: now };
@@ -164,14 +166,22 @@ export default defineBackground(() => {
     const site = siteKey(host);
     const gates = await session<GateShown>(S.gates, {});
     const shown = gates[tabId]?.site === site ? gates[tabId]?.at : undefined;
-    const check = checkGrant(await policyInput(cls.category, host, now), minutes, intent, shown);
+    const input = await policyInput(cls.category, host, now);
+    const isPrivate = cls.category === 'private';
+    if (isPrivate) minutes = settings.privatePassMin; // 私密只有一档，客户端传的分钟数不作数
+    const check = isPrivate ? checkPrivateGrant(input, shown) : checkGrant(input, minutes, intent, shown);
     if (!check.ok) return check;
     const pass: Pass = { site, intent: intent.trim(), minutes, grantedAt: now, until: now + minutes * 60_000 };
     const passes = await session<Record<string, Pass>>(S.passes, {});
     passes[site] = pass;
     delete gates[tabId];
     await chrome.storage.session.set({ [S.passes]: passes, [S.gates]: gates });
-    await addEvent({ date: today(now), at: now, type: 'pass', site, intent: pass.intent, minutes });
+    // 私密事件不记站点（报告里不暴露域名）
+    await addEvent(
+      isPrivate
+        ? { date: today(now), at: now, type: 'private-pass', intent: pass.intent, minutes }
+        : { date: today(now), at: now, type: 'pass', site, intent: pass.intent, minutes },
+    );
     chrome.alarms.create(`${A.passPrefix}${site}`, { when: pass.until });
     void broadcast();
     return { ok: true };
@@ -270,7 +280,9 @@ export default defineBackground(() => {
       germanGoalMin: settings.germanGoalMin,
       driftSec: totals.drift,
       driftCapMin: settings.driftCapMin,
-      totalSec: totals.german + totals.study + totals.drift + totals.other,
+      privateUsed: await countEvents([today(now)], 'private-pass'),
+      privatePerDay: settings.privatePerDay,
+      totalSec: totals.german + totals.study + totals.drift + totals.private + totals.other,
       tab,
       continueGerman: await continueGerman(),
       incognitoAllowed: await chrome.extension.isAllowedIncognitoAccess(),
@@ -342,7 +354,8 @@ export default defineBackground(() => {
     void ready.then(() =>
       serial(async () => {
         await loadConfig();
-        await apply({ type: 'reclassify', at: Date.now() });
+        // 完整对账而非只重分类：idle 阈值可能变了，必须按新阈值重新查询 idle 状态
+        await apply(await buildSyncEvent(settings.idleThresholdSec));
         schedulePhaseAlarm();
         await updateBadge();
         void broadcast();
@@ -423,6 +436,10 @@ export default defineBackground(() => {
         const id = tabId ?? msg.tabId;
         return id === undefined ? { ok: false, reason: 'no-tab' } : goGerman(id);
       }
+      case 'private-skip':
+        await addEvent({ date: today(), at: Date.now(), type: 'private-skip', intent: msg.action.slice(0, 40) });
+        if (tabId !== undefined) await chrome.tabs.remove(tabId);
+        return { ok: true };
       case 'close-tab':
         if (tabId !== undefined) await chrome.tabs.remove(tabId);
         return { ok: true };

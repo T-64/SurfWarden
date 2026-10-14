@@ -22,6 +22,7 @@ const pages = {
   'german.test': '<h1>Nicos Weg · Folge 12</h1><p>Deutsch lernen</p>',
   'drift.test': '<h1>Live</h1><video id="v" muted loop></video><p>endless feed</p>',
   'other.test': '<h1>Random blog</h1>',
+  'private.test': '<h1>private</h1><video></video>',
 };
 const server = http.createServer((req, res) => {
   const host = (req.headers.host ?? '').split(':')[0];
@@ -79,11 +80,12 @@ async function configure(schedulePatch = {}, settingsPatch = {}) {
     async ({ schedule, settingsPatch }) => {
       const { settings } = await chrome.storage.local.get('settings');
       await chrome.storage.local.set({
-        settings: { ...settings, schedule, idleThresholdSec: 3600, driftCapMin: 60, ...settingsPatch },
+        settings: { ...settings, schedule, idleThresholdSec: 3600, driftCapMin: 60, privateCooldownSec: 4, ...settingsPatch },
         rules: [
           { id: 'e1', pattern: 'drift.test', category: 'drift', createdAt: 1 },
           { id: 'e2', pattern: 'german.test', category: 'german', createdAt: 2 },
           { id: 'e3', pattern: 'bilibili.com', category: 'drift', createdAt: 3 },
+          { id: 'e4', pattern: 'private.test', category: 'private', createdAt: 4 },
         ],
       });
     },
@@ -111,12 +113,18 @@ async function readDb() {
 }
 const overlay = (page) => page.locator('surfwarden-gate .ov');
 const banner = (page) => page.locator('surfwarden-gate .banner');
-const shot = async (page, name) => SHOTS && page.screenshot({ path: path.join(SHOTS, `${name}.png`) });
+const shot = async (page, name) => {
+  if (!SHOTS) return;
+  await page.waitForTimeout(600); // 等遮罩淡入动画结束
+  await page.screenshot({ path: path.join(SHOTS, `${name}.png`) });
+};
 
 try {
   await new Promise((r) => setTimeout(r, 1000));
   await configure();
   const page = await ctx.newPage();
+  // 无头浏览器里新标签不一定拿到窗口焦点；只计聚焦窗口是产品语义，测试要像用户一样把它放到前台
+  await page.bringToFront();
 
   // ---- 1. 计时：德语页 → 切到娱乐页，德语段落库 ----
   await page.goto(url('german.test'));
@@ -131,7 +139,7 @@ try {
   const db1 = await readDb();
   const germanSec = db1.usage.filter((r) => r.category === 'german').reduce((s, r) => s + r.seconds, 0);
   check('离开德语页后德语时长已落库', germanSec >= 2, `${germanSec.toFixed(1)}s`);
-  const go = overlay(page).locator('button.primary');
+  const go = overlay(page).locator('button.go');
   check('等待期按钮不可点', await go.isDisabled(), await go.textContent());
   await overlay(page).getByText('放松一下').click();
   await shot(page, 'v3-gate');
@@ -151,7 +159,7 @@ try {
   await overlay(page).getByText('时间到').waitFor({ timeout: 8000 });
   check('通行证到期后显示「时间到」并复述意图', (await overlay(page).textContent()).includes('放松一下'));
   await shot(page, 'v3-expired');
-  await overlay(page).locator('button.german').click();
+  await overlay(page).locator('button.sw-btn-cta').click();
   await page.waitForURL(/german\.test/, { timeout: 8000 });
   check('「去学德语」回到上次的德语页', page.url().includes('german.test'), page.url());
 
@@ -185,6 +193,46 @@ try {
   await page.waitForTimeout(1500);
   check('标记为德语学习后立即放行', (await overlay(page).count()) === 0);
 
+  // ---- 6b. 私密站点：冷静期 → 离开（记一次赢）/ 冷静后进入 / 次数用完 ----
+  const p2 = await ctx.newPage();
+  await p2.bringToFront();
+  await p2.goto(url('private.test'));
+  await overlay(p2).getByText('先离开屏幕三分钟').waitFor({ timeout: 8000 });
+  const enter = overlay(p2).getByRole('button', { name: /冷静期|还是要看/ });
+  check('私密站点出现冷静期，进入按钮先禁用', await enter.isDisabled(), await enter.textContent());
+  check('冷静期不显示站点域名', !(await overlay(p2).textContent()).includes('private.test'));
+  await shot(p2, 'v3-cooldown');
+  await overlay(p2).getByText('用冷水洗把脸').click();
+  await overlay(p2).getByText('不想了，关掉').click();
+  await p2.waitForEvent('close', { timeout: 5000 }).catch(() => undefined);
+  check('「不想了，关掉」关闭标签页', p2.isClosed());
+
+  const p3 = await ctx.newPage();
+  await p3.bringToFront();
+  await p3.goto(url('private.test'));
+  await overlay(p3).getByText('先离开屏幕三分钟').waitFor({ timeout: 8000 });
+  await overlay(p3).getByText('做 15 个俯卧撑').click();
+  await overlay(p3).getByText('现在还想吗').waitFor({ timeout: 8000 });
+  const enter3 = overlay(p3).getByRole('button', { name: /还是要看/ });
+  check('冷静期满后可以进入', !(await enter3.isDisabled()), await enter3.textContent());
+  await enter3.click();
+  await banner(p3).waitFor({ timeout: 5000 });
+  check('冷静后进入：遮罩消失、显示剩余时间', (await overlay(p3).count()) === 0, await banner(p3).textContent());
+  await swEval(async () => {
+    const { passes } = await chrome.storage.session.get('passes');
+    for (const k of Object.keys(passes)) passes[k].until = Date.now() - 1000;
+    await chrome.storage.session.set({ passes });
+  });
+  await p3.reload();
+  await overlay(p3).getByText('时间到').waitFor({ timeout: 8000 });
+  check('私密时间到：今天次数用完，不提供「再来一次」', (await overlay(p3).getByText('再来一次').count()) === 0);
+  await swEval(async () => chrome.storage.session.set({ passes: {} }));
+  await p3.reload();
+  await overlay(p3).getByText('今天的次数用过了').waitFor({ timeout: 8000 });
+  check('私密每日次数用完后直接拦截', true);
+  await p3.close();
+  await page.bringToFront();
+
   // ---- 7. 收尾期 ----
   const m = nowMin();
   await configure({ windDown: mod(m - 10), bedtime: mod(m + 20), wake: mod(m + 600) });
@@ -211,16 +259,18 @@ try {
   await reason.fill('明早要交的作业截止');
   await extBtn.click();
   await banner(page).waitFor({ timeout: 8000 });
-  check('写理由后延长放行', (await banner(page).textContent()).includes('宵禁延长'));
+  check('写理由后延长放行', (await banner(page).textContent()).includes('延长剩'));
   await page.goto(url('drift.test'));
   await overlay(page).getByText('该睡了').waitFor({ timeout: 8000 });
-  check('延长期内娱乐站仍拦截', (await overlay(page).getByText('娱乐站在宵禁期间不能延长').count()) === 1);
+  check('延长期内娱乐站仍拦截', (await overlay(page).getByText('这类网站在宵禁期间不能延长').count()) === 1);
 
   const db2 = await readDb();
   const types = db2.events.map((e) => e.type);
   check(
-    '事件日志：通行证 ×1、去学德语、标记频道、宵禁延长',
-    types.filter((t) => t === 'pass').length === 1 && types.includes('go-german') && types.includes('mark-channel') && types.includes('curfew-ext'),
+    '事件日志：通行证、去学德语、标记频道、私密离开/进入、宵禁延长；私密事件不含站点',
+    types.filter((t) => t === 'pass').length === 1 &&
+      ['go-german', 'mark-channel', 'private-skip', 'private-pass', 'curfew-ext'].every((t) => types.includes(t)) &&
+      db2.events.filter((e) => e.type.startsWith('private')).every((e) => !e.site),
     JSON.stringify(types),
   );
 } catch (e) {

@@ -7,7 +7,7 @@ import type { CategoryId, DayRow, EventRow, Schedule, SessionRow, UsageRow } fro
 export type CategoryTotals = Record<CategoryId, number>;
 
 export function emptyTotals(): CategoryTotals {
-  return { german: 0, study: 0, drift: 0, other: 0 };
+  return { german: 0, study: 0, drift: 0, private: 0, other: 0 };
 }
 
 export function totalsByCategory(rows: UsageRow[]): CategoryTotals {
@@ -27,10 +27,13 @@ export function totalsByDate(rows: UsageRow[]): Map<string, CategoryTotals> {
   return out;
 }
 
+/** 私密站点不暴露域名：在 TOP 列表里合并为一行 PRIVATE_HOST */
+export const PRIVATE_HOST = '私密站点';
+
 export function topHosts(rows: UsageRow[], n: number): Array<{ host: string; seconds: number; category: CategoryId }> {
   const m = new Map<string, { seconds: number; byCat: CategoryTotals }>();
   for (const r of rows) {
-    const host = r.host.replace(/^www\./, '');
+    const host = r.category === 'private' ? PRIVATE_HOST : r.host.replace(/^www\./, '');
     let e = m.get(host);
     if (!e) m.set(host, (e = { seconds: 0, byCat: emptyTotals() }));
     e.seconds += r.seconds;
@@ -112,7 +115,7 @@ export function timeline(sessions: SessionRow[], date: string, cutoffHour: numbe
     if (last && last.category === s.category && from - last.to <= 120_000 / span) {
       last.to = Math.max(last.to, to);
     } else {
-      out.push({ from, to, category: s.category, host: s.host });
+      out.push({ from, to, category: s.category, host: s.category === 'private' ? PRIVATE_HOST : s.host });
     }
   }
   return out;
@@ -156,4 +159,24 @@ export function intentSummary(events: EventRow[], usage: UsageRow[]): SiteIntent
   }
   for (const s of bySite.values()) s.actualMin = Math.round((actual.get(s.site) ?? 0) / 60);
   return [...bySite.values()].sort((a, b) => b.actualMin - a.actualMin);
+}
+
+export interface PrivateSummary {
+  /** 冷静期后仍进入 */
+  entered: number;
+  /** 冷静期后离开（每一次都算赢） */
+  skipped: number;
+  /** 离开前选的动作 → 次数 */
+  actions: Record<string, number>;
+}
+
+export function privateSummary(events: EventRow[]): PrivateSummary {
+  const out: PrivateSummary = { entered: 0, skipped: 0, actions: {} };
+  for (const e of events) {
+    if (e.type !== 'private-pass' && e.type !== 'private-skip') continue;
+    if (e.type === 'private-pass') out.entered++;
+    else out.skipped++;
+    if (e.intent) out.actions[e.intent] = (out.actions[e.intent] ?? 0) + 1;
+  }
+  return out;
 }

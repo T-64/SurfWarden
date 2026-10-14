@@ -3,15 +3,16 @@ import type { CategoryId, ChannelRule, GermanTarget, Rule, Settings } from '../c
 /** 默认配置（首次安装写入；之后以 storage 为准，缺失字段用这里补齐）。 */
 
 /**
- * 类别色：dataviz 校验（暗面 #131518，--pairs all）通过——德语/学业/娱乐任意两两
- * CVD ΔE ≥ 10.3、明度带 0.48–0.67、对比 ≥ 3:1。避开红绿（原 #3ddc84/#ff5c5c 氘盲 ΔE 2.1）。
- * 「其他」是刻意压暗的背景桶（对比 < 3:1），靠图例 + 悬停 + 表格补足。
+ * 类别外观。color 是 CSS 变量，随「纸与夜」两种情绪切换（theme.css）；三个彩色类别
+ * 经 dataviz 校验（任意两两、含色盲 ΔE ≥ 9），私密用斜线纹理而非颜色（不与任何类别撞色，
+ * 也更低调），其他为退后的灰。
  */
 export const CATEGORY_META: Record<CategoryId, { name: string; color: string }> = {
-  german: { name: '德语', color: '#1fa67a' },
-  study: { name: '学业', color: '#4f8de0' },
-  drift: { name: '娱乐', color: '#d9732f' },
-  other: { name: '其他', color: '#4b5058' },
+  german: { name: '德语', color: 'var(--c-german)' },
+  study: { name: '学业', color: 'var(--c-study)' },
+  drift: { name: '娱乐', color: 'var(--c-drift)' },
+  private: { name: '私密', color: 'var(--c-private)' },
+  other: { name: '其他', color: 'var(--c-other)' },
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -34,6 +35,9 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   curfewExtMin: 10,
   curfewExtPerNight: 1,
+  privateCooldownSec: 180,
+  privatePassMin: 20,
+  privatePerDay: 1,
   idleThresholdSec: 120,
   idleGraceSec: 60,
   dayCutoffHour: 5,
@@ -96,6 +100,33 @@ export const DEFAULT_RULES: Rule[] = [
     ],
     'drift',
     300,
+  ),
+  ...seed(
+    [
+      'pornhub.com',
+      'xvideos.com',
+      'xnxx.com',
+      'xhamster.com',
+      'redtube.com',
+      'youporn.com',
+      'spankbang.com',
+      'eporner.com',
+      'onlyfans.com',
+      'chaturbate.com',
+      'stripchat.com',
+      'missav.com',
+      'missav.ws',
+      'jable.tv',
+      '91porn.com',
+      'javdb.com',
+      'javlibrary.com',
+      'hanime.tv',
+      'nhentai.net',
+      'e-hentai.org',
+      'rule34.xxx',
+    ],
+    'private',
+    400,
   ),
 ];
 

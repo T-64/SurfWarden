@@ -5,7 +5,7 @@
 
 // ===== 类别与分类 =====
 
-export const CATEGORY_IDS = ['german', 'study', 'drift', 'other'] as const;
+export const CATEGORY_IDS = ['german', 'study', 'drift', 'private', 'other'] as const;
 export type CategoryId = (typeof CATEGORY_IDS)[number];
 
 export function isCategoryId(x: unknown): x is CategoryId {
@@ -61,6 +61,10 @@ export interface Settings {
   curfewAllow: { categories: CategoryId[]; hosts: string[] };
   curfewExtMin: number;
   curfewExtPerNight: number;
+  /** 私密站点（成人内容）：冷静期秒数、单次通行分钟、每日次数 */
+  privateCooldownSec: number;
+  privatePassMin: number;
+  privatePerDay: number;
   idleThresholdSec: number;
   idleGraceSec: number;
   dayCutoffHour: number;
@@ -197,11 +201,13 @@ export type Banner =
   | { kind: 'late'; since: number }
   | { kind: 'ext'; until: number };
 
-export type BlockReason = 'cap' | 'expired' | 'winddown' | 'curfew';
+export type BlockReason = 'cap' | 'expired' | 'winddown' | 'curfew' | 'private-limit';
 
 export type Verdict =
   | { kind: 'allow'; banner?: Banner }
   | { kind: 'gate'; waitSec: number; options: number[]; passesToday: number; driftLeftMin: number }
+  /** 私密站点：先离开屏幕做件事（冷水洗脸 / 俯卧撑），冷静期满才可进入 */
+  | { kind: 'cooldown'; waitSec: number; passMin: number; usedToday: number; limit: number }
   | { kind: 'block'; reason: BlockReason; canExtend: boolean; canRetry: boolean };
 
 // ===== 数据（IndexedDB） =====
@@ -224,7 +230,7 @@ export interface DayRow {
   lastAt: number;
 }
 
-export type EventType = 'pass' | 'curfew-ext' | 'go-german' | 'mark-channel';
+export type EventType = 'pass' | 'curfew-ext' | 'go-german' | 'mark-channel' | 'private-pass' | 'private-skip';
 
 export interface EventRow {
   id?: number;

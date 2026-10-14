@@ -66,6 +66,7 @@ for (let i = 0; i < 14; i++) {
     { date, category: 'study', host: 'github.com', seconds: study[i] * 30 },
     { date, category: 'study', host: 'ilias3.uni-stuttgart.de', seconds: study[i] * 30 },
     { date, category: 'other', host: 'www.google.com', seconds: 1500 },
+    ...(i % 4 === 1 ? [{ date, category: 'private', host: 'example-private.test', seconds: 900 }] : []),
   );
   if (i < 13) days.push({ date, firstAt: at(off, ...mornings[i]), lastAt: at(off, ...nights[i]) });
   else days.push({ date, firstAt: at(off, ...mornings[i]), lastAt: Date.now() });
@@ -76,6 +77,7 @@ const blocks = [
   [12, 10, 12, 50, 'german', 'learngerman.dw.com'],
   [13, 0, 13, 35, 'drift', 'live.bilibili.com'],
   [14, 0, 17, 0, 'study', 'github.com'],
+  [16, 30, 16, 38, 'private', 'example-private.test'],
   [19, 30, 20, 0, 'drift', 'x.com'],
   [20, 15, 20, 50, 'german', 'www.bilibili.com'],
 ];
@@ -96,6 +98,10 @@ const events = [
   { date: today, at: at(0, 13, 12), type: 'pass', site: 'bilibili.com', intent: '看一个具体的视频 / 直播', minutes: 20 },
   { date: today, at: at(0, 19, 30), type: 'pass', site: 'x.com', intent: '查个东西', minutes: 5 },
   { date: today, at: at(0, 13, 36), type: 'go-german' },
+  { date: today, at: at(0, 16, 40), type: 'private-skip', intent: '用冷水洗把脸' },
+  { date: dk(at(-2, 12, 0)), at: at(-2, 15, 10), type: 'private-skip', intent: '做 15 个俯卧撑' },
+  { date: dk(at(-3, 12, 0)), at: at(-3, 21, 5), type: 'private-pass', intent: '喝杯水，站起来走走', minutes: 20 },
+  { date: dk(at(-5, 12, 0)), at: at(-5, 14, 0), type: 'private-skip', intent: '用冷水洗把脸' },
   { date: dk(at(-1, 12, 0)), at: at(-1, 23, 20), type: 'curfew-ext', reason: 'Abgabe 明早截止，交作业', minutes: 10, site: 'ilias3.uni-stuttgart.de' },
 ];
 
@@ -124,11 +130,11 @@ await live.waitForTimeout(1500);
 const liveTabId = await sw.evaluate(async () => (await chrome.tabs.query({ url: '*://live.test/*' }))[0]?.id);
 
 const popup = await ctx.newPage();
-await popup.setViewportSize({ width: 340, height: 720 });
+await popup.setViewportSize({ width: 360, height: 720 });
 await popup.goto(`chrome-extension://${extId}/popup.html?tab=${liveTabId}`);
 await popup.waitForTimeout(1200);
 const h = await popup.evaluate(() => document.body.scrollHeight);
-await popup.setViewportSize({ width: 340, height: h });
+await popup.setViewportSize({ width: 360, height: h });
 await popup.screenshot({ path: path.join(OUT, 'v3-popup.png') });
 
 const report = await ctx.newPage();
@@ -145,6 +151,24 @@ await options.setViewportSize({ width: 960, height: 900 });
 await options.goto(`chrome-extension://${extId}/options.html`);
 await options.waitForTimeout(1200);
 await options.screenshot({ path: path.join(OUT, 'v3-options.png'), fullPage: true });
+
+// 夜间情绪：把作息摆成"此刻是宵禁"，再截 popup 与报告
+await sw.evaluate(async () => {
+  const d = new Date();
+  const m = d.getHours() * 60 + d.getMinutes();
+  const mod = (x) => ((x % 1440) + 1440) % 1440;
+  const { settings } = await chrome.storage.local.get('settings');
+  await chrome.storage.local.set({ settings: { ...settings, schedule: { windDown: mod(m - 60), bedtime: mod(m - 20), wake: mod(m + 480) } } });
+});
+await popup.waitForTimeout(800);
+await popup.reload();
+await popup.waitForTimeout(1200);
+await popup.setViewportSize({ width: 360, height: await popup.evaluate(() => document.body.scrollHeight) });
+await popup.screenshot({ path: path.join(OUT, 'v3-popup-night.png') });
+await report.setViewportSize({ width: 1160, height: 900 });
+await report.reload();
+await report.waitForTimeout(1500);
+await report.screenshot({ path: path.join(OUT, 'v3-report-night.png'), fullPage: true });
 
 await ctx.close();
 server.close();
